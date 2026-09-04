@@ -1,0 +1,50 @@
+# 이 저장소의 코드 서식 규칙.
+#
+#   clang-format -i $(find lidar_inertial_odometer point-to-plane-icp \
+#                          \( -name '*.cpp' -o -name '*.hpp' \) )
+#
+# 핵심 두 가지:
+#   1. 중괄호는 언제나 다음 줄에 (Allman). 한 줄짜리 축약형은 쓰지 않는다.
+#   2. 웬만하면 한 문장을 한 줄에 담는다. ColumnLimit 을 넘을 때만 나눈다.
+---
+Language: Cpp
+BasedOnStyle: Google
+
+BreakBeforeBraces: Allman
+
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+AccessModifierOffset: -4
+ContinuationIndentWidth: 8
+NamespaceIndentation: None
+
+# 좀 길더라도 한 줄에 다 처리한다.
+ColumnLimit: 160
+
+# 중괄호 생략 / 한 줄 축약 금지
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: None
+AllowShortBlocksOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortLambdasOnASingleLine: None
+
+BinPackArguments: true
+BinPackParameters: true
+AlignAfterOpenBracket: Align
+
+PointerAlignment: Left
+DerivePointerAlignment: false
+SpaceBeforeParens: ControlStatements
+
+# 사람이 넣은 빈 줄(논리 묶음 구분)은 그대로 둔다.
+MaxEmptyLinesToKeep: 1
+KeepEmptyLinesAtTheStartOfBlocks: true
+
+# 한글 주석이 깨지지 않도록 주석은 건드리지 않는다.
+# (clang-format 은 표시 폭이 아니라 바이트 수로 세기 때문에
+#  reflow / 정렬을 켜면 한글 줄이 이상하게 잘린다.)
+ReflowComments: false
+AlignTrailingComments: false
+SortIncludes: false

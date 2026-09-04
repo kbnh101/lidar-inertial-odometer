@@ -1,0 +1,169 @@
+# lidar_inertial_odometer -- KITTI bag(2011_09_30_drive_0028.bag) 설정.
+#
+# ROS1 이라 노드의 private namespace 로 그대로 로드된다:
+#   <node ...><rosparam command="load" file="$(find ...)/config/kitti.yaml"/></node>
+
+# --------------------------------------------------------------------------
+# 토픽 -- `rosbag info data/2011_09_30_drive_0028.bag` 로 확인한 실제 이름.
+#   /points_raw    sensor_msgs/PointCloud2   9.6 Hz   frame_id: velodyne
+#   /imu_raw       sensor_msgs/Imu           100 Hz   frame_id: imu_link
+#   /imu_correct   sensor_msgs/Imu           100 Hz   frame_id: imu_enu_link
+#   /gps/fix       sensor_msgs/NavSatFix     10 Hz    frame_id: imu_link
+#   /gps/vel       geometry_msgs/TwistStamped 10 Hz   (사용 안 함)
+#
+# /imu_correct 는 LIO-SAM 이 ENU 로 돌려 둔 IMU 인데, KITTI OXTS 는 이미
+# x-전방 y-좌 z-상 (ROS 규약)이라 이 bag 에서는 /imu_raw 와 값이 완전히
+# 동일하다(500 샘플 비교, 최대 차이 0.0). calib_imu_to_velo 가 OXTS IMU
+# frame 기준이므로 frame_id 가 일치하는 /imu_raw 를 쓴다.
+# --------------------------------------------------------------------------
+lidar_topic: /points_raw
+imu_topic: /imu_raw
+gps_topic: /gps/fix
+
+# --------------------------------------------------------------------------
+# 좌표계 (TF)
+#   odom --(동적, odometry)--> imu_link --(정적, calib)--> velodyne
+# lidar_frame 은 bag 의 PointCloud2 frame_id 와 같아야 rviz 에서 원본
+# /points_raw 가 제자리에 뜬다.
+# --------------------------------------------------------------------------
+odom_frame: odom
+base_frame: imu_link
+lidar_frame: velodyne
+
+publish_tf: true
+publish_static_tf: true
+
+# 궤적 기록 (top-view 비교 플롯용, TUM 포맷)
+trajectory_csv: /tmp/lio_trajectory.txt
+gt_trajectory_csv: /tmp/lio_gt.txt
+
+publish_feature_cloud: true   # ~/features : 법선 달린 평면 특징점 (odom frame)
+publish_submap: true          # ~/submap   : sliding-window local map (odom frame)
+# ~/scan 은 **전처리를 마친** 스캔이다. ring 대역뿐 아니라 아래의
+# min_range / max_range / min_z 필터도 이미 걸려 있어 원본보다 훨씬 성기다.
+# 원본 64채널을 그대로 보려면 rviz 에서 /points_raw 디스플레이를 켤 것.
+publish_scan_cloud: true      # ~/scan     : 전처리+deskew 된 스캔 (velodyne frame)
+verbose: true
+
+# --------------------------------------------------------------------------
+# Extrinsic -- KITTI 2011_09_30 calib_imu_to_velo.txt 그대로 (T_velo_imu:
+# p_velo = R p_imu + T). 노드가 역행렬을 취해 T_imu_lidar 로 쓰고, 그 값을
+# 그대로 imu_link -> velodyne 정적 TF 로도 내보낸다.
+#   inverse: t_imu_velo = [0.810544, -0.307054, 0.802724], 회전 0.8585 deg
+# 다른 날짜 데이터를 쓸 때는 해당 calib 폴더 값으로 교체할 것.
+# --------------------------------------------------------------------------
+calib_imu_to_velo_R: [ 9.999976e-01,  7.553071e-04, -2.035826e-03,
+                      -7.854027e-04,  9.998898e-01, -1.482298e-02,
+                       2.024406e-03,  1.482454e-02,  9.998881e-01]
+calib_imu_to_velo_T: [-8.086759e-01,  3.195559e-01, -7.997231e-01]
+gravity_magnitude: 9.80665
+
+# --------------------------------------------------------------------------
+# 초기화
+# --------------------------------------------------------------------------
+init_imu_samples: 1          # 100 Hz 기준 1 s
+use_imu_orientation_for_yaw: true   # OXTS 절대 방위로 world 를 ENU 에 정렬
+
+# --------------------------------------------------------------------------
+# LiDAR 전처리: ring 기반 64채널 -> 32채널
+#
+# 위아래를 잘라내고 가운데 대역만 남긴다. [ring_min, ring_max] 가 그 대역이고,
+# 기본 [16, 47] 은 아래 16채널(0..15)과 위 16채널(48..63)을 버려 정확히
+# 가운데 32채널만 쓴다는 뜻이다.
+#
+# 이 bag 의 ring 은 아래에서 위로 증가한다 (실측, 5 프레임 평균):
+#     ring  2 -> -23.63 deg      ring 32 -> -11.26 deg
+#     ring 16 -> -17.96 deg      ring 48 ->  -4.50 deg
+#     ring 63 -> +2.57 deg       (전 구간 단조 증가)
+# 즉 기본 대역은 고도각 -17.96 ~ -4.50 deg 이다. 센서 높이 1.8 m 기준으로
+# 지면을 약 5.5 ~ 23 m 반경에서 훑는 구간이라, 지면과 근거리 구조물이 함께
+# 잡힌다.
+#
+# ring_selection:
+#   all    : [ring_min, ring_max] 안의 모든 채널 (기본). 채널 수는 대역으로 정한다.
+#   stride : 같은 대역 안에서 (ring - ring_min) % ring_stride == 0 인 채널만.
+#            대역은 그대로 두고 수직 해상도만 균일하게 절반으로 떨어뜨리고
+#            싶을 때 쓴다. 대역 전체(0..63) + stride 2 로 두면 예전 방식이 된다.
+#
+# 참고 1: 이 bag 은 ring 0, 1 에 점이 하나도 없다 (기본 대역 밖이라 무관).
+# 참고 2: ring 63 은 상단 clamp 통이라 프레임당 ~10400점(다른 링의 4배)이
+#         고도각 1.6~4.3 deg 에 퍼져 들어온다. 기본 대역에서는 이미 잘린다.
+# --------------------------------------------------------------------------
+# 주의: 대역과 stride 는 AND 로 걸린다. 대역 [16,47] 에 stride 2 를 함께 주면
+#       32 채널이 아니라 16 채널이 된다. 정확히 32 채널이 되는 조합은 둘 중 하나다.
+#         (1) 대역 [16,47] + all      <- 기본. 가운데 32 채널
+#         (2) 대역 [0,63]  + stride 2 <- 전 대역에서 짝수 ring 32 개
+ring_selection: all
+num_channels: 64
+ring_min: 16                  # 이보다 아래 채널(0..15)은 버린다
+ring_max: 47                  # 이보다 위  채널(48..63)은 버린다
+ring_stride: 2                # ring_selection: stride 일 때만 쓰인다
+
+vertical_fov_min_deg: -24.8   # HDL-64E (ring 필드가 없는 bag 대비용 복원 파라미터)
+vertical_fov_max_deg: 2.0
+min_range: 3.0
+max_range: 150.0
+min_z: -3.0
+scan_period: 0.1              # 10 Hz
+enable_deskew: true
+
+# --------------------------------------------------------------------------
+# 평면 특징 + 법선 추정
+#   normal_method: "neighborhood_pca" 또는 "loam_curvature"
+# --------------------------------------------------------------------------
+normal_method: loam_curvature
+
+# (A) loam_curvature 전용
+curvature_window: 5
+num_sectors: 6
+max_planar_per_sector: 40
+max_planar_curvature: 0.1
+
+# 두 방식 공통 PCA 파라미터
+normal_min_neighbors: 5       # 반경 안 이웃이 이보다 적으면 법선을 버린다
+normal_max_neighbors: 12      # 이웃 개수 상한. 크게 잡으면 패치가 넓어져
+                              # 법선은 매끄러워지지만 점-법선 쌍의 국소성이
+                              # 떨어져 ICP 가 나빠진다. 0 이면 제한 없음
+normal_search_radius: 1.0     # 최소 탐색 반경 [m]
+normal_search_radius_scale: 0.06  # 실제 반경 = max(위 값, scale * range).
+                                  # LiDAR 점 간격은 거리에 비례해 벌어진다.
+max_plane_rms: 0.06           # sqrt(lambda0) 상한 [m]
+max_eigenvalue_ratio: 0.12    # lambda0/lambda1 상한 (법선 유일성)
+min_planarity: 0.0            # (lambda1-lambda0)/lambda2 하한. 0 이면 비활성.
+                              # LiDAR 패치는 비등방이라 이 지표가 잘 안 맞는다
+                              # (feature_extractor.hpp 주석 참조).
+feature_voxel_size: 0.4       # PCA 이웃 탐색용 downsample [m]
+
+# --------------------------------------------------------------------------
+# Local map = submap (scan-to-map ICP 의 target, ~/submap 으로 publish)
+# --------------------------------------------------------------------------
+map_max_keyframes: 25
+map_voxel_size: 0.4
+map_crop_radius: 80.0
+keyframe_translation: 1.0
+keyframe_rotation: 0.18
+
+# --------------------------------------------------------------------------
+# ICP (point-to-plane-icp 구현체)
+# --------------------------------------------------------------------------
+icp_max_iterations: 12
+icp_solver_iterations: 6
+icp_max_correspondence_distance: 1.5
+icp_min_normal_dot: 0.5
+icp_translation_tolerance: 1.0e-4
+icp_rotation_tolerance: 1.0e-5
+icp_error_tolerance: 1.0e-6
+icp_huber_delta: 0.2          # 실제 스캔에는 outlier 가 있으므로 필수
+icp_verbose: false
+
+# --------------------------------------------------------------------------
+# ICP 결과 게이팅
+# --------------------------------------------------------------------------
+min_icp_correspondences: 50
+max_icp_translation_deviation: 1.5
+max_icp_rotation_deviation: 0.35
+
+# --------------------------------------------------------------------------
+# ICP -> IMU 되먹임 (속도 보정)
+# --------------------------------------------------------------------------
+velocity_correction_gain: 0.9

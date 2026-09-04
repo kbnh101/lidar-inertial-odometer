@@ -1,0 +1,3 @@
+# 이 Dockerfile 은 COPY 를 쓰지 않는다(소스는 run.sh 에서 bind-mount).
+# 1.3GB 짜리 build/data 디렉토리가 빌드 컨텍스트로 전송되지 않게 전부 제외한다.
+*

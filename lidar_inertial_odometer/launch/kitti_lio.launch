@@ -1,0 +1,54 @@
+<?xml version="1.0"?>
+<!--
+  KITTI 2011_09_30_drive_0028.bag (ROS1) 으로 LiDAR-Inertial Odometry 실행.
+
+    roslaunch lidar_inertial_odometer kitti_lio.launch
+    roslaunch lidar_inertial_odometer kitti_lio.launch rate:=0.3
+    roslaunch lidar_inertial_odometer kitti_lio.launch play:=false     # 노드만
+    roslaunch lidar_inertial_odometer kitti_lio.launch rviz:=false
+
+  주의: 한 프레임 처리(전처리 + 법선 + ICP)가 실시간보다 느리면 bag 재생
+  속도를 따라가지 못해 IMU 메시지가 큐에서 밀려 버려진다. 그러면 그 구간은
+  deskew/예측을 못 해 프레임이 통째로 스킵된다. rate 를 0.3~0.5 로 낮춰 쓸 것.
+-->
+<launch>
+  <arg name="bag"
+       default="$(find lidar_inertial_odometer)/../data/2011_09_30_drive_0028.bag"
+       doc="재생할 ROS1 bag 경로"/>
+  <arg name="rate"   default="1.0" doc="rosbag 재생 배속"/>
+  <arg name="start"  default="52.0" doc="bag 재생 시작 오프셋 [s]"/>
+  <arg name="duration" default="0.0" doc="재생 길이 [s]. 0 이면 끝까지."/>
+  <arg name="play"   default="true" doc="false 면 bag 을 재생하지 않고 노드만 띄운다"/>
+  <arg name="rviz"   default="true"/>
+  <arg name="config" default="$(find lidar_inertial_odometer)/config/kitti.yaml"/>
+
+  <arg name="normal_method"  default="loam_curvature"
+       doc="'loam_curvature' 또는 'neighborhood_pca'"/>
+  <arg name="ring_selection" default="all" doc="'all' 또는 'stride'"/>
+  <arg name="ring_min" default="16" doc="쓸 ring 하한. 이보다 아래 채널은 버린다"/>
+  <arg name="ring_max" default="47" doc="쓸 ring 상한. 이보다 위 채널은 버린다"/>
+
+  <arg name="trajectory_csv" default="/tmp/lio_trajectory.txt"/>
+  <arg name="gt_csv"         default="/tmp/lio_gt.txt"/>
+
+  <!-- bag 을 재생할 때만 /clock 을 쓴다. -->
+  <param name="/use_sim_time" value="$(arg play)"/>
+
+  <node pkg="lidar_inertial_odometer" type="lio_node" name="lidar_inertial_odometer"
+        output="screen" required="true">
+    <rosparam command="load" file="$(arg config)"/>
+    <!-- 아래 값들은 yaml 을 덮어쓴다 (launch 인자로 바로 바꿔 보기 위함). -->
+    <param name="normal_method"     value="$(arg normal_method)"/>
+    <param name="ring_selection"    value="$(arg ring_selection)"/>
+    <param name="ring_min"          value="$(arg ring_min)"/>
+    <param name="ring_max"          value="$(arg ring_max)"/>
+    <param name="trajectory_csv"    value="$(arg trajectory_csv)"/>
+    <param name="gt_trajectory_csv" value="$(arg gt_csv)"/>
+  </node>
+
+  <node if="$(arg play)" pkg="rosbag" type="play" name="rosbag_play" output="screen"
+        args="$(eval '--clock --queue 200 --rate ' + str(rate) + ' --start ' + str(start) + (' --duration ' + str(duration) if float(duration) > 0 else '') + ' ' + bag)"/>
+
+  <node if="$(arg rviz)" pkg="rviz" type="rviz" name="rviz" output="log"
+        args="-d $(find lidar_inertial_odometer)/rviz/kitti_lio.rviz"/>
+</launch>
