@@ -1,9 +1,9 @@
-#include "p2p_icp/kdtree.hpp"
+#include "common/kdtree.hpp"
 
 #include <algorithm>
 #include <limits>
 
-namespace p2p_icp
+namespace common
 {
 namespace
 {
@@ -145,4 +145,4 @@ void KdTree3d::search_recursive(int node_id, const Eigen::Vector3d& query, int* 
     }
 }
 
-}  // namespace p2p_icp
+}  // namespace common

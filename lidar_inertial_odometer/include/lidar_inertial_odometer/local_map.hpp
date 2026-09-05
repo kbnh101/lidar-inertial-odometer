@@ -4,7 +4,7 @@
 #include <deque>
 
 #include "lidar_inertial_odometer/util.hpp"
-#include "p2p_icp/point_cloud.hpp"
+#include "common/point_cloud.hpp"
 
 /**
  * @brief Sliding-window local map that serves as the target of the scan-to-map ICP
@@ -51,14 +51,14 @@ public:
      * @param cloud_world planar features with normals, in the world frame
      * @param viewpoint   centre of the crop, normally the current IMU position
      */
-    void AddKeyframe(const p2p_icp::PointCloud& cloud_world, const Eigen::Vector3d& viewpoint);
+    void AddKeyframe(const common::PointCloud& cloud_world, const Eigen::Vector3d& viewpoint);
 
     /**
      * @brief The merged and downsampled map, usable as the ICP target as is
      *
      * @return the map cloud
      */
-    const p2p_icp::PointCloud& cloud() const
+    const common::PointCloud& cloud() const
     {
         return merged_;
     }
@@ -97,6 +97,6 @@ private:
     void Rebuild(const Eigen::Vector3d& viewpoint);
 
     LocalMapOptions options_;
-    std::deque<p2p_icp::PointCloud> keyframes_;
-    p2p_icp::PointCloud merged_;
+    std::deque<common::PointCloud> keyframes_;
+    common::PointCloud merged_;
 };

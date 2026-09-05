@@ -3,9 +3,9 @@
 #include <Eigen/Core>
 #include <vector>
 
-#include "p2p_icp/point_cloud.hpp"
+#include "common/point_cloud.hpp"
 
-namespace p2p_icp
+namespace common
 {
 /**
  * @brief Static 1-NN 3-D kd-tree, used for the correspondence search
@@ -94,4 +94,4 @@ private:
     int root_ = -1;
 };
 
-}  // namespace p2p_icp
+}  // namespace common

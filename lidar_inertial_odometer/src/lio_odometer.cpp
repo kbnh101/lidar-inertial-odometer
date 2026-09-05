@@ -45,13 +45,13 @@ double Clamp(double value, double low, double high)
  * @param pose  transform to apply
  * @return the transformed cloud
  */
-p2p_icp::PointCloud TransformCloud(const p2p_icp::PointCloud& cloud, const Eigen::Isometry3d& pose)
+common::PointCloud TransformCloud(const common::PointCloud& cloud, const Eigen::Isometry3d& pose)
 {
-    p2p_icp::PointCloud transformed;
+    common::PointCloud transformed;
     transformed.reserve(cloud.size());
-    for (const p2p_icp::PointNormal& item : cloud)
+    for (const common::PointNormal& item : cloud)
     {
-        p2p_icp::PointNormal moved;
+        common::PointNormal moved;
         moved.point = pose * item.point;
         moved.normal = pose.linear() * item.normal;  // a normal is a direction, so it is only rotated
         transformed.push_back(moved);
@@ -192,7 +192,7 @@ bool LioOdometer::Initialize(double timestamp)
         initial_rotation = Eigen::AngleAxisd(options_.initial_yaw, Eigen::Vector3d::UnitZ()).toRotationMatrix() * initial_rotation;
     }
 
-    state_ = NavState{};
+    state_ = imu_preint::NavState{};
     state_.timestamp = timestamp;
     state_.rotation = Orthonormalize(initial_rotation);
     state_.position.setZero();
@@ -210,7 +210,7 @@ bool LioOdometer::Initialize(double timestamp)
     return true;
 }
 
-void LioOdometer::IntegrateInterval(ImuPreintegrator* integrator, double t0, double t1) const
+void LioOdometer::IntegrateInterval(imu_preint::ImuPreintegrator* integrator, double t0, double t1) const
 {
     if (t1 <= t0 || imu_queue_.size() < 2)
     {
@@ -253,8 +253,8 @@ void LioOdometer::IntegrateInterval(ImuPreintegrator* integrator, double t0, dou
     }
 }
 
-std::vector<RawLidarPoint> LioOdometer::Deskew(const std::vector<RawLidarPoint>& points, const NavState& state_at_scan_start,
-                                               const ImuPreintegrator& scan_integrator) const
+std::vector<RawLidarPoint> LioOdometer::Deskew(const std::vector<RawLidarPoint>& points, const imu_preint::NavState& state_at_scan_start,
+                                               const imu_preint::ImuPreintegrator& scan_integrator) const
 {
     // Move every point back into the lidar frame at the scan start time i:
     //
@@ -273,7 +273,7 @@ std::vector<RawLidarPoint> LioOdometer::Deskew(const std::vector<RawLidarPoint>&
     for (const RawLidarPoint& point : points)
     {
         const double tau = Clamp(point.rel_time, 0.0, options_.scan_period);
-        const PreintegratedDelta delta = scan_integrator.delta_at(tau);
+        const imu_preint::PreintegratedDelta delta = scan_integrator.delta_at(tau);
 
         const Eigen::Vector3d point_imu = T_il * point.position;
         const Eigen::Vector3d point_ref = delta.rotation * point_imu + delta.position + Ri_transpose * (velocity * tau + 0.5 * gravity * tau * tau);
@@ -294,7 +294,7 @@ void LioOdometer::ProcessScan(const QueuedScan& scan)
     // The prediction serves two purposes: the ICP initial_guess and the deskew reference state.
     preintegrator_.reset();
     IntegrateInterval(&preintegrator_, state_.timestamp, scan.timestamp);
-    const NavState predicted = preintegrator_.predict(state_, options_.gravity);
+    const imu_preint::NavState predicted = preintegrator_.predict(state_, options_.gravity);
     result.imu_prediction = predicted.isometry();
 
     // --- 2. integrate the scan interval separately, for deskewing ----------------
@@ -303,7 +303,7 @@ void LioOdometer::ProcessScan(const QueuedScan& scan)
     std::vector<RawLidarPoint> corrected;
     if (options_.enable_deskew)
     {
-        ImuPreintegrator scan_integrator;
+        imu_preint::ImuPreintegrator scan_integrator;
         IntegrateInterval(&scan_integrator, scan.timestamp, scan.timestamp + options_.scan_period);
         corrected = Deskew(preprocessed, predicted, scan_integrator);
     }
@@ -360,7 +360,7 @@ void LioOdometer::ProcessScan(const QueuedScan& scan)
     result.icp_accepted = accepted;
 
     // --- 5. state update ----------------------------------------------------------
-    NavState updated;
+    imu_preint::NavState updated;
     updated.timestamp = scan.timestamp;
     const Eigen::Isometry3d body_pose = lidar_pose * options_.T_imu_lidar.inverse();
     updated.rotation = Orthonormalize(body_pose.linear());
@@ -368,7 +368,7 @@ void LioOdometer::ProcessScan(const QueuedScan& scan)
     updated.velocity = predicted.velocity;
 
     const double dt = preintegrator_.delta_t();
-    const PreintegratedDelta delta = preintegrator_.delta();
+    const imu_preint::PreintegratedDelta delta = preintegrator_.delta();
 
     if (accepted && dt > 1e-6)
     {

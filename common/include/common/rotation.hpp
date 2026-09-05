@@ -2,7 +2,7 @@
 
 #include <Eigen/Core>
 
-namespace p2p_icp
+namespace common
 {
 /**
  * @brief Z-Y-X Euler angles to a rotation matrix
@@ -64,4 +64,4 @@ Eigen::Matrix3d rotation_derivative_gamma(double alpha, double beta, double gamm
  */
 Eigen::Vector3d rotation_to_euler_zyx(const Eigen::Matrix3d& rotation);
 
-}  // namespace p2p_icp
+}  // namespace common

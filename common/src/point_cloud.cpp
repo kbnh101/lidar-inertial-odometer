@@ -1,10 +1,10 @@
-#include "p2p_icp/point_cloud.hpp"
+#include "common/point_cloud.hpp"
 
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
 
-namespace p2p_icp
+namespace common
 {
 PointCloud load_point_cloud(const std::string& path)
 {
@@ -69,4 +69,4 @@ PointCloud transform_point_cloud(const PointCloud& cloud, const Eigen::Matrix3d&
     return out;
 }
 
-}  // namespace p2p_icp
+}  // namespace common

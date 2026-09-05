@@ -4,6 +4,8 @@
 #include <cstddef>
 #include <vector>
 
+namespace common
+{
 /**
  * @brief 3-D kd-tree for radius neighbour search
  *
@@ -74,3 +76,5 @@ private:
     std::vector<Node> nodes_;
     int root_ = -1;
 };
+
+}  // namespace common

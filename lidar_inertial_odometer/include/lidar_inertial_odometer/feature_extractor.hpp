@@ -3,7 +3,7 @@
 #include <Eigen/Core>
 #include <vector>
 
-#include "lidar_inertial_odometer/kdtree_radius.hpp"
+#include "common/kdtree_radius.hpp"
 #include "lidar_inertial_odometer/util.hpp"
 
 /**
@@ -99,7 +99,7 @@ private:
      * @param normal  output: unit normal, flipped towards the sensor
      * @return true when the normal is usable
      */
-    bool EstimateNormal(const KdTreeRadius& tree, const std::vector<Eigen::Vector3d>& support, const Eigen::Vector3d& query, bool use_planarity_test,
+    bool EstimateNormal(const common::KdTreeRadius& tree, const std::vector<Eigen::Vector3d>& support, const Eigen::Vector3d& query, bool use_planarity_test,
                         Eigen::Vector3d* normal) const;
 
     FeatureExtractorOptions options_;

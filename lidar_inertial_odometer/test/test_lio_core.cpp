@@ -1,5 +1,5 @@
 // Self-contained checks for lio_core, no KITTI rosbag needed:
-//   1. ImuPreintegrator matches its own definition and predict() matches a
+//   1. imu_preint::ImuPreintegrator matches its own definition and predict() matches a
 //      direct integration of the kinematics,
 //   2. FeatureExtractor recovers correct normals on synthetic planes (both methods),
 //   3. LioOdometer recovers the trajectory from a synthetic IMU + LiDAR stream.
@@ -17,10 +17,9 @@
 #include <string>
 #include <vector>
 
+#include "imu_preint/so3.hpp"
 #include "lidar_inertial_odometer/feature_extractor.hpp"
-#include "lidar_inertial_odometer/imu_preintegrator.hpp"
 #include "lidar_inertial_odometer/lio_odometer.hpp"
-#include "lidar_inertial_odometer/so3.hpp"
 
 namespace
 {
@@ -61,7 +60,7 @@ struct GroundTruthMotion
     Eigen::Vector3d body_accel = Eigen::Vector3d(0.4, 0.15, -0.05);  ///< [m/s^2], body
 
     /// Builds the true state by integrating the kinematics directly.
-    NavState Integrate(NavState state, double dt, int steps, std::vector<ImuSample>* samples) const
+    imu_preint::NavState Integrate(imu_preint::NavState state, double dt, int steps, std::vector<ImuSample>* samples) const
     {
         for (int k = 0; k < steps; ++k)
         {
@@ -78,7 +77,7 @@ struct GroundTruthMotion
             }
             state.position += state.velocity * dt + 0.5 * accel_world * dt * dt;
             state.velocity += accel_world * dt;
-            state.rotation = state.rotation * so3::Exp(body_rate * dt);
+            state.rotation = state.rotation * imu_preint::so3::Exp(body_rate * dt);
             state.timestamp += dt;
         }
         if (samples != nullptr)
@@ -94,63 +93,7 @@ struct GroundTruthMotion
 };
 
 // ---------------------------------------------------------------------
-// 1. IMU preintegration
-// ---------------------------------------------------------------------
-void TestPreintegration()
-{
-    std::printf("\n[1] ImuPreintegrator -- recursion, definition, predict()\n");
-
-    GroundTruthMotion motion;
-    const double dt = 0.005;
-    const int steps = 200;  // 1.0 s
-
-    NavState state_i;
-    state_i.rotation = Eigen::AngleAxisd(0.3, Eigen::Vector3d(0.2, -0.5, 0.84).normalized()).toRotationMatrix();
-    state_i.velocity = Eigen::Vector3d(3.0, -1.0, 0.2);
-    state_i.position = Eigen::Vector3d(10.0, -5.0, 1.0);
-
-    std::vector<ImuSample> samples;
-    const NavState state_j = motion.Integrate(state_i, dt, steps, &samples);
-
-    // Preintegration -> predict must reproduce the true state.
-    ImuPreintegrator preintegrator;
-    preintegrator.reset();
-    for (int k = 0; k < steps; ++k)
-    {
-        preintegrator.integrate(samples[k].angular_velocity, samples[k].linear_acceleration, dt);
-    }
-
-    const NavState predicted = preintegrator.predict(state_i, motion.gravity);
-    CheckNear((predicted.position - state_j.position).norm(), 0.0, 1e-9, "predict() position matches the directly integrated truth");
-    CheckNear((predicted.velocity - state_j.velocity).norm(), 0.0, 1e-9, "predict() velocity matches the truth");
-    CheckNear(so3::Log(predicted.rotation.transpose() * state_j.rotation).norm(), 0.0, 1e-9, "predict() attitude matches the truth");
-
-    // Check the Delta definitions against the recursively integrated result.
-    const PreintegratedDelta delta = preintegrator.delta();
-    const double dt_ij = delta.dt;
-    const Eigen::Matrix3d Ri_transpose = state_i.rotation.transpose();
-    const Eigen::Matrix3d delta_R_definition = Ri_transpose * state_j.rotation;
-    const Eigen::Vector3d delta_v_definition = Ri_transpose * (state_j.velocity - state_i.velocity - motion.gravity * dt_ij);
-    const Eigen::Vector3d delta_p_definition =
-            Ri_transpose * (state_j.position - state_i.position - state_i.velocity * dt_ij - 0.5 * motion.gravity * dt_ij * dt_ij);
-
-    CheckNear(so3::Log(delta.rotation.transpose() * delta_R_definition).norm(), 0.0, 1e-9, "dR_ij = R_i^T R_j              (definition == recursion)");
-    CheckNear((delta.velocity - delta_v_definition).norm(), 0.0, 1e-9, "dv_ij = R_i^T(v_j-v_i-g dt)    (definition == recursion)");
-    CheckNear((delta.position - delta_p_definition).norm(), 0.0, 1e-9, "dp_ij = R_i^T(p_j-p_i-v_i dt-..) (definition == recursion)");
-
-    // --- delta_at(): intermediate query used by deskewing ------------------
-    const PreintegratedDelta half = preintegrator.delta_at(0.5 * dt_ij);
-    ImuPreintegrator half_integrator;
-    half_integrator.reset();
-    for (int k = 0; k < steps / 2; ++k)
-    {
-        half_integrator.integrate(samples[k].angular_velocity, samples[k].linear_acceleration, dt);
-    }
-    CheckNear((half.position - half_integrator.delta().position).norm(), 0.0, 1e-9, "delta_at(t) matches an integration up to t (deskew)");
-}
-
-// ---------------------------------------------------------------------
-// 2. Feature extraction / normals
+// 1. Feature extraction / normals
 // ---------------------------------------------------------------------
 /// A bounded planar patch.
 struct BoundedPlane
@@ -223,7 +166,7 @@ public:
 class MovingSensorPose : public SensorPoseProvider
 {
 public:
-    MovingSensorPose(const GroundTruthMotion& motion, const NavState& scan_start, const Eigen::Isometry3d& T_imu_lidar, double imu_dt)
+    MovingSensorPose(const GroundTruthMotion& motion, const imu_preint::NavState& scan_start, const Eigen::Isometry3d& T_imu_lidar, double imu_dt)
     {
         motion_ = motion;
         scan_start_ = scan_start;
@@ -234,13 +177,13 @@ public:
     Eigen::Isometry3d PoseAt(double tau) const
     {
         const int steps = std::max(1, static_cast<int>(std::lround(tau / imu_dt_)));
-        const NavState body = motion_.Integrate(scan_start_, tau / steps, steps, nullptr);
+        const imu_preint::NavState body = motion_.Integrate(scan_start_, tau / steps, steps, nullptr);
         return body.isometry() * T_imu_lidar_;
     }
 
 private:
     GroundTruthMotion motion_;
-    NavState scan_start_;
+    imu_preint::NavState scan_start_;
     Eigen::Isometry3d T_imu_lidar_;
     double imu_dt_;
 };
@@ -319,7 +262,7 @@ std::vector<RawLidarPoint> MakeSyntheticScan(const SensorPoseProvider& sensor_po
 
 void TestFeatureExtraction()
 {
-    std::printf("\n[2] FeatureExtractor -- planar candidates + PCA normals\n");
+    std::printf("\n[1] FeatureExtractor -- planar candidates + PCA normals\n");
 
     // Static scan -- no motion distortion.
     const StaticSensorPose static_pose;
@@ -360,7 +303,7 @@ void TestFeatureExtraction()
 
         // Scene normals are axis-aligned, so every estimate must be too.
         int aligned = 0;
-        for (const p2p_icp::PointNormal& item : features.planar)
+        for (const common::PointNormal& item : features.planar)
         {
             const double best = item.normal.cwiseAbs().maxCoeff();
             if (best > 0.99)
@@ -373,7 +316,7 @@ void TestFeatureExtraction()
 
         // Sign consistency: every normal must face the sensor.
         int facing = 0;
-        for (const p2p_icp::PointNormal& item : features.planar)
+        for (const common::PointNormal& item : features.planar)
         {
             if (item.normal.dot(-item.point) > 0.0)
             {
@@ -429,7 +372,7 @@ void TestFeatureExtraction()
 }
 
 // ---------------------------------------------------------------------
-// 2b. Deskew in isolation
+// 1b. Deskew in isolation
 // ---------------------------------------------------------------------
 /// The true world coordinate of every point is known, so the deskewed point is
 /// compared against the truth expressed in the scan-start lidar frame.
@@ -437,13 +380,13 @@ void TestFeatureExtraction()
 /// patch and others miss, which breaks the correspondence.)
 void TestDeskew()
 {
-    std::printf("\n[2b] Deskew -- undoing motion during the scan\n");
+    std::printf("\n[1b] Deskew -- undoing motion during the scan\n");
 
     GroundTruthMotion motion;
     motion.body_rate = Eigen::Vector3d(0.0, 0.0, 0.3);  // a clear turn
     motion.body_accel = Eigen::Vector3d::Zero();
 
-    NavState start;
+    imu_preint::NavState start;
     start.velocity = Eigen::Vector3d(8.0, 0.0, 0.0);  // 0.8 m over 0.1 s
     const double imu_dt = 0.005;
     const double scan_period = 0.1;
@@ -460,7 +403,7 @@ void TestDeskew()
     // Integrate the IMU over the scan interval.
     std::vector<ImuSample> samples;
     motion.Integrate(start, imu_dt, 40, &samples);
-    ImuPreintegrator scan_integrator;
+    imu_preint::ImuPreintegrator scan_integrator;
     scan_integrator.reset();
     for (std::size_t i = 0; i + 1 < samples.size(); ++i)
     {
@@ -483,7 +426,7 @@ void TestDeskew()
         const Eigen::Vector3d expected = start_pose_inverse * (moving_pose.PoseAt(tau) * point.position);
 
         // Same expression as LioOdometer::Deskew().
-        const PreintegratedDelta delta = scan_integrator.delta_at(tau);
+        const imu_preint::PreintegratedDelta delta = scan_integrator.delta_at(tau);
         const Eigen::Vector3d corrected =
                 T_li * (delta.rotation * (T_il * point.position) + delta.position + Ri_transpose * (start.velocity * tau + 0.5 * motion.gravity * tau * tau));
 
@@ -496,7 +439,7 @@ void TestDeskew()
 }
 
 // ---------------------------------------------------------------------
-// 3. Full pipeline
+// 2. Full pipeline
 // ---------------------------------------------------------------------
 /// Runs the pipeline once and reports the error metrics and frame count.
 struct PipelineOutcome
@@ -553,12 +496,12 @@ PipelineOutcome RunPipeline(NormalMethod method, bool enable_deskew)
     odometer.icp().set_options(icp_options);
 
     // Build the true trajectory and feed IMU at 200 Hz, LiDAR at 10 Hz.
-    NavState truth;
+    imu_preint::NavState truth;
     truth.timestamp = 0.0;
     truth.velocity = Eigen::Vector3d(4.0, 0.0, 0.0);  // forward along body x
     const double imu_dt = 0.005;
 
-    std::vector<NavState> truth_at_scan;
+    std::vector<imu_preint::NavState> truth_at_scan;
 
     // Feed the initialization IMU first, without LiDAR.
     {
@@ -578,7 +521,7 @@ PipelineOutcome RunPipeline(NormalMethod method, bool enable_deskew)
 
         // The vehicle really moves during the scan; if deskewing does not undo
         // that, no amount of ICP accuracy removes the resulting error floor.
-        const NavState scan_start = truth;
+        const imu_preint::NavState scan_start = truth;
         const MovingSensorPose scan_pose(motion, scan_start, options.T_imu_lidar, imu_dt);
         odometer.AddLidarScan(scan_time, MakeSyntheticScan(scan_pose, 100 + scan_index));
 
@@ -592,7 +535,7 @@ PipelineOutcome RunPipeline(NormalMethod method, bool enable_deskew)
         odometer.PopResults();
     }
 
-    const std::vector<NavState>& trajectory = odometer.trajectory();
+    const std::vector<imu_preint::NavState>& trajectory = odometer.trajectory();
     PipelineOutcome outcome;
     outcome.frames = trajectory.size();
     if (trajectory.empty())
@@ -643,7 +586,7 @@ PipelineOutcome RunPipeline(NormalMethod method, bool enable_deskew)
 
 void TestOdometryPipeline()
 {
-    std::printf("\n[3] LioOdometer -- IMU preintegration -> initial_guess -> ICP\n");
+    std::printf("\n[2] LioOdometer -- IMU preintegration -> initial_guess -> ICP\n");
 
     const int expected_frames = 38;  // initialization consumes up to 2 of the 40 scans
 
@@ -665,7 +608,7 @@ void TestOdometryPipeline()
     // Effect of deskewing. Here the velocity and turn rate are constant, so the
     // distortion pattern repeats every scan and largely cancels even without
     // correction; real driving keeps changing, so it does not. The accuracy of
-    // the deskew expression itself is checked point-wise in [2b].
+    // the deskew expression itself is checked point-wise in [1b].
     const PipelineOutcome with_deskew = RunPipeline(NormalMethod::kNeighborhoodPca, true);
     const PipelineOutcome without_deskew = RunPipeline(NormalMethod::kNeighborhoodPca, false);
     std::printf("     -- deskew on drift %.2f %% (RPE %.4f m) vs off %.2f %% (RPE %.4f m)\n", with_deskew.drift_percent,
@@ -678,7 +621,6 @@ void TestOdometryPipeline()
 int main()
 {
     std::printf("=== lidar_inertial_odometer core test ===\n");
-    TestPreintegration();
     TestFeatureExtraction();
     TestDeskew();
     TestOdometryPipeline();

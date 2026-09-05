@@ -1,4 +1,4 @@
-#include "p2p_icp/icp_point_to_plane.hpp"
+#include "p2pt_icp/icp_point_to_point.hpp"
 
 #include <ceres/ceres.h>
 
@@ -8,23 +8,23 @@
 #include <limits>
 #include <stdexcept>
 
-#include "p2p_icp/point_to_plane_cost.hpp"
 #include "common/rotation.hpp"
+#include "p2pt_icp/point_to_point_cost.hpp"
 
-namespace p2p_icp
+namespace p2pt_icp
 {
-void IcpPointToPlane::set_source(const common::PointCloud& source)
+void IcpPointToPoint::set_source(const common::PointCloud& source)
 {
     source_ = source;
 }
 
-void IcpPointToPlane::set_target(const common::PointCloud& target)
+void IcpPointToPoint::set_target(const common::PointCloud& target)
 {
     target_ = target;
     target_tree_.build(target_);  // every correspondence search goes through this kd-tree
 }
 
-std::vector<IcpPointToPlane::Correspondence> IcpPointToPlane::find_correspondences(const Eigen::Isometry3d& pose) const
+std::vector<IcpPointToPoint::Correspondence> IcpPointToPoint::find_correspondences(const Eigen::Isometry3d& pose) const
 {
     std::vector<Correspondence> correspondences;
     correspondences.reserve(source_.size());
@@ -42,27 +42,11 @@ std::vector<IcpPointToPlane::Correspondence> IcpPointToPlane::find_correspondenc
         {
             continue;
         }
-        // Rejection 1, distance: a pair this far apart is probably a wrong correspondence.
+        // A pair this far apart is probably a wrong correspondence.
+        // Point-to-point has no normal test -- distance is the only rejection available here.
         if (squared_distance > max_squared_distance)
         {
             continue;
-        }
-
-        const Eigen::Vector3d& target_normal = target_[target_index].normal;
-        // A target point without a normal defines no tangent plane and is therefore unusable.
-        if (target_normal.squaredNorm() <= 0.0)
-        {
-            continue;
-        }
-
-        // Rejection 2, normal agreement -- the only place the source normal n_x is used.
-        if (options_.min_normal_dot > -1.0 && source_[i].normal.squaredNorm() > 0.0)
-        {
-            const Eigen::Vector3d rotated_source_normal = pose.linear() * source_[i].normal;
-            if (rotated_source_normal.dot(target_normal) < options_.min_normal_dot)
-            {
-                continue;
-            }
         }
 
         correspondences.push_back(Correspondence{static_cast<int>(i), target_index});
@@ -70,7 +54,7 @@ std::vector<IcpPointToPlane::Correspondence> IcpPointToPlane::find_correspondenc
     return correspondences;
 }
 
-void IcpPointToPlane::evaluate_error(const Eigen::Isometry3d& pose, const std::vector<Correspondence>& correspondences, double* rms, double* mean_abs,
+void IcpPointToPoint::evaluate_error(const Eigen::Isometry3d& pose, const std::vector<Correspondence>& correspondences, double* rms, double* mean_abs,
                                      double* max_abs) const
 {
     double sum_squared = 0.0;
@@ -79,11 +63,11 @@ void IcpPointToPlane::evaluate_error(const Eigen::Isometry3d& pose, const std::v
     for (const Correspondence& correspondence : correspondences)
     {
         const Eigen::Vector3d transformed = pose * source_[correspondence.source_index].point;
-        // The same residual as in the cost function: r_n = n_y . (R x_n + t - y_n)
-        const double residual = target_[correspondence.target_index].normal.dot(transformed - target_[correspondence.target_index].point);
+        // Point-to-point residual: the full error vector r_n = R x_n + t - y_n, measured by its norm.
+        const double residual = (transformed - target_[correspondence.target_index].point).norm();
         sum_squared += residual * residual;
-        sum_abs += std::abs(residual);
-        max_value = std::max(max_value, std::abs(residual));
+        sum_abs += residual;
+        max_value = std::max(max_value, residual);
     }
     const double count = static_cast<double>(correspondences.size());
     if (rms != nullptr)
@@ -100,19 +84,53 @@ void IcpPointToPlane::evaluate_error(const Eigen::Isometry3d& pose, const std::v
     }
 }
 
-IcpResult IcpPointToPlane::do_icp(const Eigen::Isometry3d& initial_guess)
+IcpResult IcpPointToPoint::do_icp(const Eigen::Isometry3d& initial_guess)
 {
     if (source_.empty())
     {
-        throw std::runtime_error("IcpPointToPlane::do_icp: source cloud is empty");
+        throw std::runtime_error("IcpPointToPoint::do_icp: source cloud is empty");
     }
     if (target_.empty())
     {
-        throw std::runtime_error("IcpPointToPlane::do_icp: target cloud is empty");
+        throw std::runtime_error("IcpPointToPoint::do_icp: target cloud is empty");
     }
 
     IcpResult result;
     result.transform = initial_guess;
+
+    // TODO: implement the outer loop. The shape it should take, per iteration:
+    //
+    //   1. correspondences = find_correspondences(result.transform)
+    //      Stop if fewer than 3 pairs survive: point-to-point gives 3 constraints per pair, so
+    //      3 non-collinear pairs are the minimum for the 6 unknowns.
+    //
+    //   2. Fill an IcpIterationLog, and record error_before via evaluate_error().
+    //
+    //   3. Solve for the increment. Set up std::array<double, 6> xi{} at 0, optionally compute the
+    //      pivot (the centroid of the transformed source over the correspondences) when
+    //      options_.pivot_increment_at_centroid is set, then for every pair add
+    //
+    //        new PointToPointCostFunction(result.transform * source_[i].point - pivot,
+    //                                     target_[j].point - pivot)
+    //
+    //      to a ceres::Problem on xi.data(), with a ceres::HuberLoss when huber_delta > 0.
+    //      Solve with DENSE_QR + LEVENBERG_MARQUARDT and max_solver_iterations.
+    //
+    //   4. Compose the increment onto result.transform. The increment acts as
+    //      p -> R(p - pivot) + pivot + t, so its world translation is (pivot - R*pivot + t):
+    //
+    //        increment.linear() = common::euler_zyx_to_rotation(xi[3], xi[4], xi[5]);
+    //        increment.translation() = pivot - increment.linear() * pivot + Eigen::Vector3d(xi[0], xi[1], xi[2]);
+    //        result.transform = increment * result.transform;
+    //
+    //      Record delta_translation / delta_rotation and error_after, push the log, and update
+    //      result.iterations / result.correspondences.
+    //
+    //   5. Converge on a small step (translation_tolerance and rotation_tolerance) or a stalled
+    //      error (error_tolerance). Ceres' own termination_type is not enough: a new correspondence
+    //      set is a different objective, so the outer convergence must be judged here.
+    //
+    // Then re-pair the correspondences once more and report the final error, exactly as below.
 
     double previous_error = std::numeric_limits<double>::infinity();
 
@@ -165,7 +183,7 @@ IcpResult IcpPointToPlane::do_icp(const Eigen::Isometry3d& initial_guess)
             const Eigen::Vector3d source_point = result.transform * source_[correspondence.source_index].point - pivot;
             const Eigen::Vector3d target_point = target_[correspondence.target_index].point - pivot;
             problem.AddResidualBlock(
-                    new PointToPlaneCostFunction(source_point, target_point, target_[correspondence.target_index].normal),
+                    new PointToPointCostFunction(source_point, target_point),
                     loss, xi.data());
         }
 
@@ -233,16 +251,16 @@ IcpResult IcpPointToPlane::do_icp(const Eigen::Isometry3d& initial_guess)
     return result;
 }
 
-IcpResult IcpPointToPlane::do_icp(const common::PointCloud& source, const common::PointCloud& target)
+IcpResult IcpPointToPoint::do_icp(const common::PointCloud& source, const common::PointCloud& target)
 {
     return do_icp(source, target, Eigen::Isometry3d::Identity());
 }
 
-IcpResult IcpPointToPlane::do_icp(const common::PointCloud& source, const common::PointCloud& target, const Eigen::Isometry3d& initial_guess)
+IcpResult IcpPointToPoint::do_icp(const common::PointCloud& source, const common::PointCloud& target, const Eigen::Isometry3d& initial_guess)
 {
     set_source(source);
     set_target(target);
     return do_icp(initial_guess);
 }
 
-}  // namespace p2p_icp
+}  // namespace p2pt_icp

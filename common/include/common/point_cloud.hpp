@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace p2p_icp
+namespace common
 {
 /// One point together with its surface normal.
 ///
@@ -43,4 +43,4 @@ PointCloud load_point_cloud(const std::string& path);
  */
 PointCloud transform_point_cloud(const PointCloud& cloud, const Eigen::Matrix3d& rotation, const Eigen::Vector3d& translation);
 
-}  // namespace p2p_icp
+}  // namespace common

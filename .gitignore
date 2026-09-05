@@ -1,3 +1,9 @@
 .vscode/
 data/2011_09_30_drive_0028.bag
 docs/
+imu-preintegration/build/
+point-to-point-icp/build/
+point-to-point-icp/build-debug/
+point-to-plane-icp/build/
+point-to-plane-icp/build-debug/
+common/build/

@@ -7,12 +7,31 @@ preintegration class, and a LiDAR-inertial odometry that runs both on a KITTI ba
 
 ```text
 src/
+├── icp-common/              # shared ICP geometry -- cloud type, kd-tree, Euler angles
 ├── point-to-plane-icp/      # part 1 -- standalone CMake project, no ROS
-├── lidar_inertial_odometer/ # part 3 -- catkin package, contains part 2
-├── data/                    # 2011_09_30_drive_0028.bag
+├── point-to-point-icp/      # point-to-point variant, same layout
+├── imu-preintegration/      # part 2 -- standalone CMake project, no ROS
+├── lidar_inertial_odometer/ # part 3 -- catkin package, uses the above
+├── data/                    # 2011_09_30_drive_0028.bag + the sample clouds
 ├── docs/                    # assignment and the hand derivations
 └── docker/                  # dev container (run.sh / exec.sh)
 ```
+
+Every library here is ROS-free; ROS appears only in part 3's node. Nothing is copied between
+packages -- each one references its dependencies by source from CMake, so there is a single copy of
+every file. The dependency order is:
+
+```text
+icp-common ──┬──► point-to-plane-icp ──┐
+             └──► point-to-point-icp   ├──► lidar_inertial_odometer
+                  imu-preintegration ──┘
+```
+
+`icp-common` holds what the two ICP variants share and nothing else: the `PointNormal` / `PointCloud`
+types with their text loader, the 1-NN kd-tree, and the Z-Y-X Euler helpers with their three
+derivatives. Each ICP package then contains only what actually differs -- its cost function and its
+loop. Its own suite ([test_icp_common.cpp](icp-common/test/test_icp_common.cpp), 11 tests) checks the
+kd-tree against brute force and the rotation derivatives against central differences.
 
 ---
 
@@ -41,7 +60,7 @@ J_n = [ n_y.x, n_y.y, n_y.z,
 ```
 
 The translation block is just `n_y^T`, since `de/dt = I`. The three rotation derivatives are expanded
-entry by entry in [rotation.cpp](point-to-plane-icp/src/rotation.cpp).
+entry by entry in [rotation.cpp](icp-common/src/rotation.cpp).
 
 | Formula | Code in `PointToPlaneCostFunction::Evaluate()` |
 |---|---|
@@ -75,7 +94,7 @@ correspondence set is a different objective.
 |---|---|
 | `ceres::SizedCostFunction` subclass, residual + analytic Jacobian in `Evaluate()` | [point_to_plane_cost.hpp](point-to-plane-icp/include/p2p_icp/point_to_plane_cost.hpp) |
 | source / target input interface | `IcpPointToPlane::set_source() / set_target() / do_icp()` — [icp_point_to_plane.hpp](point-to-plane-icp/include/p2p_icp/icp_point_to_plane.hpp) |
-| nearest-neighbour correspondence search | hand-written kd-tree — [kdtree.hpp](point-to-plane-icp/include/p2p_icp/kdtree.hpp) |
+| nearest-neighbour correspondence search | hand-written kd-tree — [kdtree.hpp](icp-common/include/icp_common/kdtree.hpp) |
 | pose optimization / convergence / iteration | [icp_point_to_plane.cpp](point-to-plane-icp/src/icp_point_to_plane.cpp) |
 | final relative pose (R, t) | `IcpResult::transform` (`Eigen::Isometry3d`) |
 | test code | [test/test_icp.cpp](point-to-plane-icp/test/test_icp.cpp) |
@@ -92,7 +111,12 @@ ctest --test-dir build -V  # or ./build/test_icp
 ```
 
 Needs C++17, CMake ≥ 3.16, Eigen 3.4, Ceres ≥ 2.1, and GoogleTest for the test. Without GoogleTest
-only the test target is skipped.
+only the test target is skipped. `icp-common` is picked up from the sibling directory; override it
+with `-DICP_COMMON_DIR=/path/to/icp-common`.
+
+A point-to-point variant lives beside it in [point-to-point-icp/](point-to-point-icp/), built the
+same way. It minimizes `|R x_n + t - y_n|^2`, so its residual is the full 3-D error vector rather
+than its projection onto the target normal, and its Jacobian is 3x6 instead of 1x6.
 
 ### Result
 
@@ -143,7 +167,7 @@ redone. They reappear only in `predict()`, which solves the same definitions for
 
 ### Implementation
 
-[`ImuPreintegrator`](lidar_inertial_odometer/include/lidar_inertial_odometer/imu_preintegrator.hpp)
+[`imu_preint::ImuPreintegrator`](imu-preintegration/include/imu_preint/imu_preintegrator.hpp)
 implements this directly, and part 3's odometry uses it.
 
 - Integrated as a recursion rather than as sums. The order `dp -> dv -> dR` matters, because `dp` and
@@ -152,16 +176,39 @@ implements this directly, and part 3's odometry uses it.
 - `delta_at(t)` returns the partial delta at any time inside the interval, which is what deskewing
   queries per point (slerp for rotation, linear for the rest).
 - The SO(3) helpers (`Hat`, `Exp`, `Log`) are written out in
-  [so3.hpp](lidar_inertial_odometer/include/lidar_inertial_odometer/so3.hpp).
+  [so3.hpp](imu-preintegration/include/imu_preint/so3.hpp), and the state types
+  (`NavState`, `PreintegratedDelta`) in [types.hpp](imu-preintegration/include/imu_preint/types.hpp).
 
-Self-checks against synthetic data
-([test_lio_core.cpp](lidar_inertial_odometer/test/test_lio_core.cpp)):
+The package holds nothing else — no ROS, no Ceres, only Eigen.
 
-| Check | Result |
+### Build and run
+
+```bash
+cd imu-preintegration
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j$(nproc)
+
+ctest --test-dir build -V  # or ./build/test_imu_preintegration
+```
+
+Needs C++17, CMake ≥ 3.16, Eigen 3.4, and GoogleTest for the test.
+
+### Tests
+
+[test_imu_preintegration.cpp](imu-preintegration/test/test_imu_preintegration.cpp) compares the class
+against a direct integration of the kinematics, on noise-free samples from a constant turn rate with
+a constant body acceleration.
+
+| Test | What it pins down |
 |---|---|
-| `predict()` matches a direct integration of the kinematics | 2.6e-14 m |
-| definitions of the deltas == the recursion's result | 2.5e-14 |
-| `delta_at(t)` matches an integration up to `t` | 0 |
+| `DeltasMatchTheirDefinitions` | the recursion reproduces `dR_ij`, `dv_ij`, `dp_ij` as defined above |
+| `PredictReproducesTheTrueState` | `predict()` recovers the truth to 1e-9 |
+| `DeltaIsIndependentOfTheAbsoluteState` | a completely different state `i` still satisfies the definitions, without re-integrating |
+| `DeltaAtMatchesAnIntegrationUpToThatTime` | the partial query deskewing relies on is exact at a step boundary |
+| `DeltaAtClampsOutsideTheInterval` | queries before or after the interval saturate instead of extrapolating |
+| `RotationStaysOrthonormal` | the per-step re-projection holds `dR` in SO(3) |
+| `ResetLeavesTheIdentityDelta` / `NonPositiveDtIsIgnored` | reset and guard behaviour |
+| `DeltaAtOnAnEmptyIntervalIsTheIdentity` / `ZeroMotionPredictsFreeFall` | edge cases |
 
 ---
 
@@ -210,15 +257,17 @@ state → add to the local map if it is a keyframe.
 | Requirement | Implementation |
 |---|---|
 | preprocess 64-channel LiDAR down to ~32 | `FeatureExtractor::Preprocess()` selects by `ring`; default drops 16 below and 16 above |
-| IMU preintegration written as a class | [`ImuPreintegrator`](lidar_inertial_odometer/include/lidar_inertial_odometer/imu_preintegrator.hpp) |
+| IMU preintegration written as a class | [`imu_preint::ImuPreintegrator`](imu-preintegration/include/imu_preint/imu_preintegrator.hpp) |
 | reuse the part 1 ICP | `../point-to-plane-icp` referenced by source from CMake, not copied |
+| shared ICP geometry | `../icp-common` referenced the same way |
+| reuse the part 2 preintegration | `../imu-preintegration` referenced the same way |
 | ROS only as the I/O interface | ROS code lives only in [lio_node.cpp](lidar_inertial_odometer/src/lio_node.cpp); the algorithms are in `lio_core`, which has zero ROS dependency |
 | Ceres 2.1.0 / Eigen 3.4.0  | versions pinned via `find_package`; kd-tree, voxel grid and PointCloud2 parsing all hand-written |
 
 ### Build and run (catkin)
 
-This package and `point-to-plane-icp` must sit side by side under the catkin workspace's `src/`. The
-provided docker environment (`docker/run.sh`) already has that layout.
+This package, `icp-common`, `point-to-plane-icp` and `imu-preintegration` must sit side by side under
+the catkin workspace's `src/`. The provided docker environment (`docker/run.sh`) already has that layout.
 
 ```bash
 cd /home/clobot_assignment/dev_ws
@@ -228,7 +277,8 @@ source devel/setup.bash
 roslaunch lidar_inertial_odometer kitti_lio.launch
 ```
 
-Use `-DP2P_ICP_DIR=/path/to/point-to-plane-icp` if it lives elsewhere. The KITTI bag is ROS1 format
+Use `-DICP_COMMON_DIR=...`, `-DP2P_ICP_DIR=...` or `-DIMU_PREINT_DIR=...` if any of them lives
+elsewhere. The KITTI bag is ROS1 format
 and is used as is. The main launch arguments are `rate` (replay speed, default 0.5), `duration`,
 `ring_selection` and `normal_method`.
 

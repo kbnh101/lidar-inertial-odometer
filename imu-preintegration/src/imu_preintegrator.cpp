@@ -1,10 +1,11 @@
-#include "lidar_inertial_odometer/imu_preintegrator.hpp"
+#include "imu_preint/imu_preintegrator.hpp"
 
 #include <Eigen/Geometry>
-#include <algorithm>
 
-#include "lidar_inertial_odometer/so3.hpp"
+#include "imu_preint/so3.hpp"
 
+namespace imu_preint
+{
 void ImuPreintegrator::reset()
 {
     // Initial values of the recursion: dR_ii = I, dv_ii = 0, dp_ii = 0.
@@ -103,3 +104,5 @@ PreintegratedDelta ImuPreintegrator::delta_at(double t_rel) const
     interpolated.position = lower.position + ratio * (upper.position - lower.position);
     return interpolated;
 }
+
+}  // namespace imu_preint

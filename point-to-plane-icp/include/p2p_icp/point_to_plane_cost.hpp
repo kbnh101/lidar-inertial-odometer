@@ -4,7 +4,7 @@
 
 #include <Eigen/Core>
 
-#include "p2p_icp/rotation.hpp"
+#include "common/rotation.hpp"
 
 namespace p2p_icp
 {
@@ -33,7 +33,7 @@ public:
      *
      * @param source_point  x_n, the source point in the frame the parameter block transforms
      * @param target_point  y_n, the corresponding target point
-     * @param target_normal n_y, assumed to be a unit vector (load_point_cloud() normalizes on load)
+     * @param target_normal n_y, assumed to be a unit vector (common::load_point_cloud() normalizes on load)
      */
     PointToPlaneCostFunction(const Eigen::Vector3d& source_point, const Eigen::Vector3d& target_point, const Eigen::Vector3d& target_normal)
         : source_point_(source_point), target_point_(target_point), target_normal_(target_normal)
@@ -59,7 +59,7 @@ public:
         const double gamma = parameters[0][5];
 
         // R(theta) = Rz(gamma) Ry(beta) Rx(alpha)
-        const Eigen::Matrix3d rotation = euler_zyx_to_rotation(alpha, beta, gamma);
+        const Eigen::Matrix3d rotation = common::euler_zyx_to_rotation(alpha, beta, gamma);
 
         // e_n = R(theta) x_n + t - y_n
         const Eigen::Vector3d error = rotation * source_point_ + translation - target_point_;
@@ -77,9 +77,9 @@ public:
             jacobian[2] = target_normal_.z();
 
             // dr/dtheta_i = n_y^T (dR/dtheta_i) x_n, with the three derivatives in rotation.cpp.
-            jacobian[3] = target_normal_.dot(rotation_derivative_alpha(alpha, beta, gamma) * source_point_);
-            jacobian[4] = target_normal_.dot(rotation_derivative_beta(alpha, beta, gamma) * source_point_);
-            jacobian[5] = target_normal_.dot(rotation_derivative_gamma(alpha, beta, gamma) * source_point_);
+            jacobian[3] = target_normal_.dot(common::rotation_derivative_alpha(alpha, beta, gamma) * source_point_);
+            jacobian[4] = target_normal_.dot(common::rotation_derivative_beta(alpha, beta, gamma) * source_point_);
+            jacobian[5] = target_normal_.dot(common::rotation_derivative_gamma(alpha, beta, gamma) * source_point_);
         }
         return true;
     }

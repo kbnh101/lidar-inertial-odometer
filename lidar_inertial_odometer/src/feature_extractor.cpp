@@ -286,7 +286,7 @@ std::vector<int> FeatureExtractor::SelectPlanarByCurvature(const std::vector<Raw
     return selected;
 }
 
-bool FeatureExtractor::EstimateNormal(const KdTreeRadius& tree, const std::vector<Eigen::Vector3d>& support, const Eigen::Vector3d& query, bool use_planarity_test,
+bool FeatureExtractor::EstimateNormal(const common::KdTreeRadius& tree, const std::vector<Eigen::Vector3d>& support, const Eigen::Vector3d& query, bool use_planarity_test,
                                       Eigen::Vector3d* normal) const
 {
     // Point spacing grows with range, so the search radius grows with range too.
@@ -424,7 +424,7 @@ FeatureCloud FeatureExtractor::Extract(const std::vector<RawLidarPoint>& points)
         return result;
     }
 
-    KdTreeRadius tree;
+    common::KdTreeRadius tree;
     tree.build(support);
 
     result.planar.reserve(queries.size());
@@ -435,7 +435,7 @@ FeatureCloud FeatureExtractor::Extract(const std::vector<RawLidarPoint>& points)
         {
             continue;
         }
-        p2p_icp::PointNormal item;
+        common::PointNormal item;
         item.point = query;
         item.normal = normal;
         result.planar.push_back(item);

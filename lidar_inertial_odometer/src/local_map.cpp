@@ -8,7 +8,7 @@ void LocalMap::Clear()
     merged_.clear();
 }
 
-void LocalMap::AddKeyframe(const p2p_icp::PointCloud& cloud_world, const Eigen::Vector3d& viewpoint)
+void LocalMap::AddKeyframe(const common::PointCloud& cloud_world, const Eigen::Vector3d& viewpoint)
 {
     if (cloud_world.empty())
     {
@@ -25,18 +25,18 @@ void LocalMap::AddKeyframe(const p2p_icp::PointCloud& cloud_world, const Eigen::
 
 void LocalMap::Rebuild(const Eigen::Vector3d& viewpoint)
 {
-    p2p_icp::PointCloud accumulated;
+    common::PointCloud accumulated;
     std::size_t total = 0;
-    for (const p2p_icp::PointCloud& keyframe : keyframes_)
+    for (const common::PointCloud& keyframe : keyframes_)
     {
         total += keyframe.size();
     }
     accumulated.reserve(total);
 
     const double crop_squared = options_.crop_radius * options_.crop_radius;
-    for (const p2p_icp::PointCloud& keyframe : keyframes_)
+    for (const common::PointCloud& keyframe : keyframes_)
     {
-        for (const p2p_icp::PointNormal& item : keyframe)
+        for (const common::PointNormal& item : keyframe)
         {
             if (options_.crop_radius > 0.0 && (item.point - viewpoint).squaredNorm() > crop_squared)
             {

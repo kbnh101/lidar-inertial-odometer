@@ -718,7 +718,7 @@ private:
      * @param frame_id frame name
      * @return the PointCloud2 message (x, y, z, normal_x, normal_y, normal_z)
      */
-    sensor_msgs::PointCloud2 ToPointCloud2(const p2p_icp::PointCloud& cloud, const ros::Time& stamp, const std::string& frame_id) const
+    sensor_msgs::PointCloud2 ToPointCloud2(const common::PointCloud& cloud, const ros::Time& stamp, const std::string& frame_id) const
     {
         sensor_msgs::PointCloud2 msg;
         msg.header.stamp = stamp;
@@ -740,7 +740,7 @@ private:
         sensor_msgs::PointCloud2Iterator<float> iter_nx(msg, "normal_x");
         sensor_msgs::PointCloud2Iterator<float> iter_ny(msg, "normal_y");
         sensor_msgs::PointCloud2Iterator<float> iter_nz(msg, "normal_z");
-        for (const p2p_icp::PointNormal& item : cloud)
+        for (const common::PointNormal& item : cloud)
         {
             *iter_x = static_cast<float>(item.point.x());
             *iter_y = static_cast<float>(item.point.y());

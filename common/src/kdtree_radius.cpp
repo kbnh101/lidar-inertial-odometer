@@ -1,7 +1,9 @@
-#include "lidar_inertial_odometer/kdtree_radius.hpp"
+#include "common/kdtree_radius.hpp"
 
 #include <algorithm>
 
+namespace common
+{
 namespace
 {
 /// Comparator for std::nth_element, ordering two point indices by the given axis coordinate.
@@ -128,3 +130,5 @@ int KdTreeRadius::radius_search(const Eigen::Vector3d& query, double max_squared
     radius_recursive(root_, query, max_squared_distance, max_count, indices);
     return static_cast<int>(indices->size());
 }
+
+}  // namespace common

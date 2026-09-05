@@ -5,11 +5,13 @@
 // Class headers hold classes only; the plain-data enum classes / structs and their conversion
 // helpers all live here, so opening a header immediately shows where a class starts and ends.
 //
-//   1. Sensor input and navigation state   ImuSample / RawLidarPoint / NavState
-//   2. IMU preintegration result           PreintegratedDelta
-//   3. Feature extraction                  NormalMethod / RingSelection / FeatureExtractorOptions / FeatureCloud
-//   4. Local map                           LocalMapOptions
-//   5. Odometry                            LioOptions / LioFrameResult
+//   1. Sensor input                        ImuSample / RawLidarPoint
+//   2. Feature extraction                  NormalMethod / RingSelection / FeatureExtractorOptions / FeatureCloud
+//   3. Local map                           LocalMapOptions
+//   4. Odometry                            LioOptions / LioFrameResult
+//
+// The navigation state and the preintegrated measurement live in the imu-preintegration package,
+// as imu_preint::NavState and imu_preint::PreintegratedDelta.
 
 #include <Eigen/Core>
 #include <Eigen/Geometry>
@@ -17,10 +19,11 @@
 #include <string>
 #include <vector>
 
-#include "p2p_icp/point_cloud.hpp"
+#include "imu_preint/imu_preintegrator.hpp"
+#include "common/point_cloud.hpp"
 
 // ===========================================================================
-// 1. Sensor input and navigation state
+// 1. Sensor input
 // ===========================================================================
 
 /// One IMU measurement; the node converts sensor_msgs/Imu into this type.
@@ -39,43 +42,8 @@ struct RawLidarPoint
     double rel_time = -1.0;  ///< capture time relative to the scan start [s], -1 means "recover it from the azimuth"
 };
 
-/// Navigation state, matching (R_i, p_i, v_i) of the preintegration.
-struct NavState
-{
-    double timestamp = 0.0;
-    Eigen::Matrix3d rotation = Eigen::Matrix3d::Identity();  ///< R_wi (world <- imu)
-    Eigen::Vector3d position = Eigen::Vector3d::Zero();  ///< p_i (world)
-    Eigen::Vector3d velocity = Eigen::Vector3d::Zero();  ///< v_i (world)
-
-    /**
-     * @brief Packs attitude and position into a single rigid transform
-     *
-     * @return T_wi (world <- imu), velocity not included
-     */
-    Eigen::Isometry3d isometry() const
-    {
-        Eigen::Isometry3d T = Eigen::Isometry3d::Identity();
-        T.linear() = rotation;
-        T.translation() = position;
-        return T;
-    }
-};
-
 // ===========================================================================
-// 2. IMU preintegration result
-// ===========================================================================
-
-/// Preintegrated measurement -- (dR_ij, dv_ij, dp_ij, dt_ij).
-struct PreintegratedDelta
-{
-    Eigen::Matrix3d rotation = Eigen::Matrix3d::Identity();  ///< dR_ij
-    Eigen::Vector3d velocity = Eigen::Vector3d::Zero();  ///< dv_ij
-    Eigen::Vector3d position = Eigen::Vector3d::Zero();  ///< dp_ij
-    double dt = 0.0;  ///< dt_ij [s]
-};
-
-// ===========================================================================
-// 3. Feature extraction -- planar point selection and normal estimation
+// 2. Feature extraction -- planar point selection and normal estimation
 // ===========================================================================
 
 /// How planar points are selected and their normals estimated.
@@ -227,13 +195,13 @@ struct FeatureExtractorOptions
 /// Feature extraction result for one scan.
 struct FeatureCloud
 {
-    p2p_icp::PointCloud planar;  ///< planar points with normals, used as the ICP source/target
+    common::PointCloud planar;  ///< planar points with normals, used as the ICP source/target
     int num_input = 0;  ///< points surviving preprocessing
     int num_candidates = 0;  ///< planar candidates before the normal test
 };
 
 // ===========================================================================
-// 4. Local map
+// 3. Local map
 // ===========================================================================
 
 /// LocalMap parameters.
@@ -245,7 +213,7 @@ struct LocalMapOptions
 };
 
 // ===========================================================================
-// 5. Odometry
+// 4. Odometry
 // ===========================================================================
 
 /// LioOdometer runtime parameters, filled in by the node from rosparam.
@@ -294,7 +262,7 @@ struct LioFrameResult
 {
     bool valid = false;
     double timestamp = 0.0;
-    NavState state;  ///< world <- imu
+    imu_preint::NavState state;  ///< world <- imu
     Eigen::Isometry3d lidar_pose = Eigen::Isometry3d::Identity();  ///< world <- lidar
     Eigen::Isometry3d imu_prediction = Eigen::Isometry3d::Identity();
     bool icp_accepted = false;
@@ -305,7 +273,7 @@ struct LioFrameResult
     int num_map_points = 0;
     bool is_keyframe = false;
     /// Deskewed planar features moved into the world frame, for visualization.
-    p2p_icp::PointCloud feature_cloud_world;
+    common::PointCloud feature_cloud_world;
     /// Deskewed preprocessed scan in the lidar frame, filled only when LioOptions::keep_deskewed_scan.
     /// `ring` is preserved so rviz can colour by channel.
     std::vector<RawLidarPoint> scan_lidar;

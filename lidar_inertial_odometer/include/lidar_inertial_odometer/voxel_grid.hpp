@@ -6,7 +6,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "p2p_icp/point_cloud.hpp"
+#include "common/point_cloud.hpp"
 
 /// A 3-D voxel index, used as the key of the spatial hash.
 struct VoxelKey
@@ -69,7 +69,7 @@ typedef std::unordered_map<VoxelKey, PointAccumulator, VoxelKeyHash> PointVoxelM
  * @param voxel_size voxel edge length [m]; the cloud is returned unchanged when not positive
  * @return the downsampled cloud
  */
-inline p2p_icp::PointCloud VoxelDownsample(const p2p_icp::PointCloud& cloud, double voxel_size)
+inline common::PointCloud VoxelDownsample(const common::PointCloud& cloud, double voxel_size)
 {
     if (voxel_size <= 0.0 || cloud.empty())
     {
@@ -79,7 +79,7 @@ inline p2p_icp::PointCloud VoxelDownsample(const p2p_icp::PointCloud& cloud, dou
     NormalVoxelMap voxels;
     voxels.reserve(cloud.size());
 
-    for (const p2p_icp::PointNormal& item : cloud)
+    for (const common::PointNormal& item : cloud)
     {
         NormalAccumulator& accumulator = voxels[MakeVoxelKey(item.point, voxel_size)];
         accumulator.point += item.point;
@@ -96,13 +96,13 @@ inline p2p_icp::PointCloud VoxelDownsample(const p2p_icp::PointCloud& cloud, dou
         ++accumulator.count;
     }
 
-    p2p_icp::PointCloud downsampled;
+    common::PointCloud downsampled;
     downsampled.reserve(voxels.size());
     for (NormalVoxelMap::const_iterator it = voxels.begin(); it != voxels.end(); ++it)
     {
         const NormalAccumulator& accumulator = it->second;
 
-        p2p_icp::PointNormal item;
+        common::PointNormal item;
         item.point = accumulator.point / static_cast<double>(accumulator.count);
         if (accumulator.normal.squaredNorm() > 1e-12)
         {

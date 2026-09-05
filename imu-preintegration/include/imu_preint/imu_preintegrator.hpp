@@ -3,8 +3,10 @@
 #include <Eigen/Core>
 #include <vector>
 
-#include "lidar_inertial_odometer/util.hpp"
+#include "imu_preint/types.hpp"
 
+namespace imu_preint
+{
 /**
  * @brief IMU preintegration
  *
@@ -97,3 +99,5 @@ private:
     std::vector<PreintegratedDelta> step_log_;
     int num_samples_ = 0;
 };
+
+}  // namespace imu_preint

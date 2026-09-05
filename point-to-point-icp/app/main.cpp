@@ -6,9 +6,9 @@
 #include <iostream>
 #include <string>
 
-#include "p2p_icp/icp_point_to_plane.hpp"
 #include "common/point_cloud.hpp"
 #include "common/rotation.hpp"
+#include "p2pt_icp/icp_point_to_point.hpp"
 
 namespace
 {
@@ -33,7 +33,7 @@ void print_pose(const Eigen::Isometry3d& pose)
 
 int main(int argc, char** argv)
 {
-    std::string data_dir = P2P_ICP_DATA_DIR;
+    std::string data_dir = P2PT_ICP_DATA_DIR;
     if (argc > 1)
     {
         data_dir = argv[1];
@@ -43,20 +43,21 @@ int main(int argc, char** argv)
 
     try
     {
+        // The loader is shared with the point-to-plane project; the normal columns are ignored here.
         const common::PointCloud source_points = common::load_point_cloud(source_path);
         const common::PointCloud target_points = common::load_point_cloud(target_path);
         std::printf("loaded %zu source points from %s\n", source_points.size(), source_path.c_str());
         std::printf("loaded %zu target points from %s\n\n", target_points.size(), target_path.c_str());
 
-        p2p_icp::IcpOptions options;
+        p2pt_icp::IcpOptions options;
         options.verbose = false;  // the loop below prints the table itself
-        p2p_icp::IcpPointToPlane icp(options);
+        p2pt_icp::IcpPointToPoint icp(options);
 
-        const p2p_icp::IcpResult result = icp.do_icp(source_points, target_points);
+        const p2pt_icp::IcpResult result = icp.do_icp(source_points, target_points);
 
         std::printf("%-5s %-8s %-24s %-24s %-12s %-12s\n", "iter", "corr", "rms error before [m]", "rms error after [m]", "|dt| [m]", "|dR| [rad]");
         std::printf("%s\n", std::string(92, '-').c_str());
-        for (const p2p_icp::IcpIterationLog& log : result.history)
+        for (const p2pt_icp::IcpIterationLog& log : result.history)
         {
             std::printf("%-5d %-8d %-24.15e %-24.15e %-12.4e %-12.4e\n", log.iteration, log.correspondences, log.error_before, log.error_after,
                         log.delta_translation, log.delta_rotation);

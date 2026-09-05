@@ -9,6 +9,8 @@
 /// The rotation group is a 3-D manifold, not a vector space, so an additive update R + dR is
 /// invalid. States live on the manifold and updates are tangent-space (R^3) vectors mapped back
 /// through Exp.
+namespace imu_preint
+{
 namespace so3
 {
 /**
@@ -59,3 +61,4 @@ inline Eigen::Vector3d Log(const Eigen::Matrix3d& R)
 }
 
 }  // namespace so3
+}  // namespace imu_preint

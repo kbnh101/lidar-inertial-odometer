@@ -6,7 +6,7 @@
 #include "common/kdtree.hpp"
 #include "common/point_cloud.hpp"
 
-namespace p2p_icp
+namespace p2pt_icp
 {
 /// ICP runtime parameters.
 struct IcpOptions
@@ -15,23 +15,17 @@ struct IcpOptions
     int max_solver_iterations = 20;  ///< Ceres iteration limit per subproblem
 
     double max_correspondence_distance = 1.0;  ///< pairs farther apart than this are rejected [m]
-    /// Rejects a correspondence when the rotated source normal disagrees with the target normal.
-    /// This is the *only* place the source normal n_x is used; it never enters the residual.
-    /// -1 disables the test.
-    double min_normal_dot = 0.0;
 
     double translation_tolerance = 1e-12;  ///< converged once |dt| falls below this [m]
     double rotation_tolerance = 1e-12;  ///< converged once |dR| falls below this [rad]
     double error_tolerance = 1e-14;  ///< converged once the RMS error stops improving by this much
 
     /// Pivots the incremental rotation at the source cloud centroid instead of the origin.
-    /// The residual and the Jacobian do not change at all (x and y just shift by the same constant);
-    /// it only decorrelates the rotation columns of J from the translation columns.
-    /// On the provided data cond(J^T J) drops from 7.3e5 to 9.2.
+    /// The residual and the Jacobian do not change, it only decorrelates the rotation columns of J
+    /// from the translation columns.
     bool pivot_increment_at_centroid = true;
 
     /// Huber loss applied to the residual. 0 disables it, so noise-free data converges to exactly 0.
-    /// Real LiDAR scans contain outliers, so keep it above 0 there.
     double huber_delta = 0.0;
 
     bool verbose = false;  ///< prints the per-iteration progress to stdout
@@ -62,20 +56,20 @@ struct IcpResult
 };
 
 /**
- * @brief Point-to-plane ICP
+ * @brief Point-to-point ICP
  *
- * Runs on the analytic Jacobian of PointToPlaneCostFunction.
+ * Minimizes the squared Euclidean distance between corresponding points, |R x_n + t - y_n|^2, over
+ * the analytic Jacobian of PointToPointCostFunction.
  *
- * Every outer iteration relinearizes: the source is transformed by the current pose, the
- * correspondences are searched again, and Ceres solves for an *increment* xi starting from 0.
- * Restarting each subproblem from 0 matters, because the Euler angles then stay near 0 and never
- * reach the beta = +-pi/2 gimbal lock.
+ * Every outer iteration relinearizes: transform the source by the current pose, search the
+ * correspondences again, and solve for an increment xi starting from 0. Restarting each subproblem
+ * from 0 keeps the Euler angles near 0, away from the beta = +-pi/2 gimbal lock.
  */
-class IcpPointToPlane
+class IcpPointToPoint
 {
 public:
-    IcpPointToPlane() = default;
-    explicit IcpPointToPlane(const IcpOptions& options) : options_(options)
+    IcpPointToPoint() = default;
+    explicit IcpPointToPoint(const IcpOptions& options) : options_(options)
     {
     }
 
@@ -112,21 +106,21 @@ public:
     /**
      * @brief Sets the source cloud
      *
-     * @param source points with normals
+     * @param source the source points
      */
     void set_source(const common::PointCloud& source);
 
     /**
      * @brief Sets the target cloud, also building the kd-tree used for the correspondence search
      *
-     * @param target points with normals
+     * @param target the target points
      */
     void set_target(const common::PointCloud& target);
 
     /**
      * @brief Runs ICP over the two clouds configured above
      *
-     * @param initial_guess initial pose; the LIO passes the IMU preintegration prediction here
+     * @param initial_guess initial pose
      * @return the final relative pose plus the error and convergence information
      */
     IcpResult do_icp(const Eigen::Isometry3d& initial_guess = Eigen::Isometry3d::Identity());
@@ -181,8 +175,6 @@ private:
     /**
      * @brief Finds the nearest target point for every source point transformed by @p pose
      *
-     * Both the distance rejection and the normal agreement rejection are applied.
-     *
      * @param pose the current pose estimate
      * @return the surviving correspondence pairs
      */
@@ -206,4 +198,4 @@ private:
     common::KdTree3d target_tree_;
 };
 
-}  // namespace p2p_icp
+}  // namespace p2pt_icp

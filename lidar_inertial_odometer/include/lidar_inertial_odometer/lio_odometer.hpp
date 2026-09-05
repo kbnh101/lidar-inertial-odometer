@@ -5,8 +5,8 @@
 #include <deque>
 #include <vector>
 
+#include "imu_preint/imu_preintegrator.hpp"
 #include "lidar_inertial_odometer/feature_extractor.hpp"
-#include "lidar_inertial_odometer/imu_preintegrator.hpp"
 #include "lidar_inertial_odometer/local_map.hpp"
 #include "lidar_inertial_odometer/util.hpp"
 #include "p2p_icp/icp_point_to_plane.hpp"
@@ -14,7 +14,7 @@
 /**
  * @brief LiDAR-Inertial Odometry core
  *
- *   IMU 100 Hz --> ImuPreintegrator --> predicted pose T_pred
+ *   IMU 100 Hz --> imu_preint::ImuPreintegrator --> predicted pose T_pred
  *                                          |
  *                                     initial_guess
  *                                          v
@@ -117,7 +117,7 @@ public:
      *
      * @return the current state (world <- imu)
      */
-    const NavState& state() const
+    const imu_preint::NavState& state() const
     {
         return state_;
     }
@@ -148,7 +148,7 @@ public:
      *
      * @return the per-frame state sequence
      */
-    const std::vector<NavState>& trajectory() const
+    const std::vector<imu_preint::NavState>& trajectory() const
     {
         return trajectory_;
     }
@@ -198,7 +198,7 @@ private:
      * @param t0 interval start [s]
      * @param t1 interval end [s]
      */
-    void IntegrateInterval(ImuPreintegrator* integrator, double t0, double t1) const;
+    void IntegrateInterval(imu_preint::ImuPreintegrator* integrator, double t0, double t1) const;
 
     /**
      * @brief Whether the IMU queue is filled up to time @p t
@@ -218,14 +218,14 @@ private:
      * @param scan_integrator preintegrator covering the scan interval alone
      * @return the deskewed points
      */
-    std::vector<RawLidarPoint> Deskew(const std::vector<RawLidarPoint>& points, const NavState& state_at_scan_start,
-                                      const ImuPreintegrator& scan_integrator) const;
+    std::vector<RawLidarPoint> Deskew(const std::vector<RawLidarPoint>& points, const imu_preint::NavState& state_at_scan_start,
+                                      const imu_preint::ImuPreintegrator& scan_integrator) const;
 
     LioOptions options_;
     FeatureExtractor feature_extractor_;
     p2p_icp::IcpPointToPlane icp_;  ///< the point-to-plane-icp implementation, reused as is
     LocalMap local_map_;
-    ImuPreintegrator preintegrator_;
+    imu_preint::ImuPreintegrator preintegrator_;
 
     /// IMU samples not yet consumed, oldest first.
     std::deque<ImuSample> imu_queue_;
@@ -236,7 +236,7 @@ private:
     bool initialized_ = false;
     /// The initial velocity is 0, so the first ICP correction is taken whole, with unit gain.
     bool velocity_initialized_ = false;
-    NavState state_;
+    imu_preint::NavState state_;
 
     Eigen::Isometry3d last_keyframe_pose_ = Eigen::Isometry3d::Identity();
     bool has_keyframe_ = false;
@@ -245,5 +245,5 @@ private:
     std::uint64_t map_version_ = 0;
     std::uint64_t icp_target_version_ = 0;
 
-    std::vector<NavState> trajectory_;
+    std::vector<imu_preint::NavState> trajectory_;
 };
