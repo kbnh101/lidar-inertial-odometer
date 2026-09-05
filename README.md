@@ -1,4 +1,4 @@
-# Point-to-Plane ICP / IMU Preintegration / LiDAR-Inertial Odometry
+# Point-to-Plane,Point ICP / IMU Preintegration / LiDAR-Inertial Odometry
 
 Three connected pieces: a point-to-plane ICP solved with Ceres on an analytic Jacobian, an IMU
 preintegration class, and a LiDAR-inertial odometry that runs both on a KITTI bag.
