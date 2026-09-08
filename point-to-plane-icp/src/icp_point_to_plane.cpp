@@ -16,11 +16,23 @@ namespace p2p_icp
 void IcpPointToPlane::set_source(const common::PointCloud& source)
 {
     source_ = source;
+    for (auto& item : source_)
+    {
+        if (!item.point.allFinite())
+            throw std::invalid_argument("source contains nonfinite points");
+        item.normal = item.normal.allFinite() && item.normal.norm() > 1e-12 ? Eigen::Vector3d(item.normal.normalized()) : Eigen::Vector3d::Zero();
+    }
 }
 
 void IcpPointToPlane::set_target(const common::PointCloud& target)
 {
     target_ = target;
+    for (auto& item : target_)
+    {
+        if (!item.point.allFinite())
+            throw std::invalid_argument("target contains nonfinite points");
+        item.normal = item.normal.allFinite() && item.normal.norm() > 1e-12 ? Eigen::Vector3d(item.normal.normalized()) : Eigen::Vector3d::Zero();
+    }
     target_tree_.build(target_);  // every correspondence search goes through this kd-tree
 }
 
@@ -164,9 +176,7 @@ IcpResult IcpPointToPlane::do_icp(const Eigen::Isometry3d& initial_guess)
             // aligned frame, which is what makes xi = 0 mean "the current state".
             const Eigen::Vector3d source_point = result.transform * source_[correspondence.source_index].point - pivot;
             const Eigen::Vector3d target_point = target_[correspondence.target_index].point - pivot;
-            problem.AddResidualBlock(
-                    new PointToPlaneCostFunction(source_point, target_point, target_[correspondence.target_index].normal),
-                    loss, xi.data());
+            problem.AddResidualBlock(new PointToPlaneCostFunction(source_point, target_point, target_[correspondence.target_index].normal), loss, xi.data());
         }
 
         ceres::Solver::Options solver_options;
@@ -181,6 +191,12 @@ IcpResult IcpPointToPlane::do_icp(const Eigen::Isometry3d& initial_guess)
 
         ceres::Solver::Summary summary;
         ceres::Solve(solver_options, &problem, &summary);
+        if (!summary.IsSolutionUsable())
+        {
+            result.converged = false;
+            result.final_error = result.final_mean_abs_error = result.final_max_abs_error = std::numeric_limits<double>::infinity();
+            return result;
+        }
 
         // --- 3. compose the increment onto the accumulated pose ----------------
         // The increment acts as p -> R(p - pivot) + pivot + t, so the world frame translation is

@@ -14,8 +14,11 @@ gps_ground_truth/         independent ament_cmake GPS reference node
 docker/                    Humble development container
 ```
 
-`main` contains the common ROS 2 migration and GPS separation, retaining the
-existing point-to-plane matcher. The matching variants branch from that common commit.
+This is the **point-to-plane-icp** branch, based on the common ROS 2/GPS commit.
+LIO links `IcpPointToPlane` and minimizes only `n_y^T e` (one scalar residual block
+per correspondence). The matcher normalizes supplied normals, rejects targets
+without a finite plane normal, and rejects unusable Ceres solutions.
+The ROS 2 and GPS interfaces are shared with `main`.
 
 ## Build and run
 

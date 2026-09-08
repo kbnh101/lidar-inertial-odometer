@@ -31,3 +31,23 @@ TEST(IcpPointToPlane, RecoversGroundtruthTransformFromFiles)
     EXPECT_NEAR(result.transform.translation().z(), 0.0, kEpsilon);
     EXPECT_NEAR(result.final_error, 0.0, kEpsilon);
 }
+
+TEST(PointToPlaneInput, NormalizesNormalsAndRejectsMissingTargetPlanes)
+{
+    common::PointCloud cloud;
+    for (int i = 0; i < 12; ++i)
+        cloud.push_back({Eigen::Vector3d(i, i % 3, i % 2), Eigen::Vector3d(0, 0, 7)});
+    p2p_icp::IcpPointToPlane icp;
+    icp.set_source(cloud);
+    icp.set_target(cloud);
+    EXPECT_NEAR(icp.target()[0].normal.norm(), 1.0, 1e-12);
+    EXPECT_NEAR(icp.source()[0].normal.norm(), 1.0, 1e-12);
+    EXPECT_TRUE(icp.do_icp().converged);
+    for (auto& point : cloud)
+        point.normal.setConstant(std::numeric_limits<double>::quiet_NaN());
+    icp.set_target(cloud);
+    const auto result = icp.do_icp();
+    EXPECT_EQ(result.correspondences, 0);
+    EXPECT_FALSE(result.converged);
+    EXPECT_TRUE(std::isinf(result.final_error));
+}

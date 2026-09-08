@@ -181,7 +181,7 @@ public:
                 ++selected;
             }
         }
-        RCLCPP_INFO(get_logger(), "lidar_inertial_odometer ready");
+        RCLCPP_INFO(get_logger(), "lidar_inertial_odometer ready (point-to-plane ICP)");
         RCLCPP_INFO(get_logger(), "  topics : lidar='%s' imu='%s'", lidar_topic_.c_str(), imu_topic_.c_str());
         RCLCPP_INFO(get_logger(), "  frames : %s -> %s -> %s", odom_frame_.c_str(), base_frame_.c_str(), lidar_frame_.c_str());
         RCLCPP_INFO(get_logger(), "  ring   : selection=%s band=[%d,%d] -> %d/%d ch (dropped %d above + %d below)",
