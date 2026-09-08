@@ -144,7 +144,6 @@ lidar_inertial_odometer:
     icp_max_iterations: 12
     icp_solver_iterations: 6
     icp_max_correspondence_distance: 1.5
-    icp_min_normal_dot: 0.5
     icp_translation_tolerance: 1.0e-4
     icp_rotation_tolerance: 1.0e-5
     icp_error_tolerance: 1.0e-6

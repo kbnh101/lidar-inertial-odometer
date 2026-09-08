@@ -1,4 +1,5 @@
 #include "lidar_inertial_odometer/lio_odometer.hpp"
+#include "lidar_inertial_odometer/voxel_grid.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -316,16 +317,19 @@ void LioOdometer::ProcessScan(const QueuedScan& scan)
         result.scan_lidar = corrected;
     }
 
-    // --- 3. planar features + normal estimation ----------------------------------
-    // KITTI clouds carry no normals, yet point-to-plane ICP absolutely needs target normals.
-    // The normals built here ride into the map when this scan becomes a keyframe, and then serve as
-    // the target of the next frame.
-    const FeatureCloud features = feature_extractor_.Extract(corrected);
+    // --- 3. point-to-point input: voxelized positions, without normals ------------
+    FeatureCloud features;
+    features.num_candidates = static_cast<int>(corrected.size());
+    common::PointCloud points;
+    points.reserve(corrected.size());
+    for (const auto& point : corrected)
+        points.push_back({point.position, Eigen::Vector3d::Zero()});
+    features.planar = VoxelDownsample(points, feature_extractor_.options().voxel_size);
     result.num_features = static_cast<int>(features.planar.size());
     result.num_map_points = static_cast<int>(local_map_.cloud().size());
 
-    // --- 4. scan-to-map point-to-plane ICP ---------------------------------------
-    // source = this scan's planar features (lidar frame), target = local map (world frame),
+    // --- 4. scan-to-map point-to-point ICP ---------------------------------------
+    // source = this scan's voxel points (lidar frame), target = local map (world frame),
     // so the transform ICP returns is exactly the world <- lidar pose.
     const Eigen::Isometry3d lidar_pose_prediction = predicted.isometry() * options_.T_imu_lidar;
     Eigen::Isometry3d lidar_pose = lidar_pose_prediction;
@@ -340,7 +344,7 @@ void LioOdometer::ProcessScan(const QueuedScan& scan)
             icp_target_version_ = map_version_;
         }
 
-        const p2p_icp::IcpResult icp_result = icp_.do_icp(lidar_pose_prediction);
+        const p2pt_icp::IcpResult icp_result = icp_.do_icp(lidar_pose_prediction);
         result.icp_iterations = icp_result.iterations;
         result.icp_correspondences = icp_result.correspondences;
         result.icp_error = icp_result.final_error;
@@ -456,8 +460,8 @@ void LioOdometer::ProcessScan(const QueuedScan& scan)
                 "[lio] t=%.3f | feat %4d/%4d | map %6d | icp %s iter %2d corr %5d rms %.4f | "
                 "p=(%8.2f %8.2f %6.2f) v=%.2f m/s%s\n",
                 scan.timestamp, result.num_features, features.num_candidates, result.num_map_points, icp_state, result.icp_iterations,
-                result.icp_correspondences, result.icp_error, updated.position.x(), updated.position.y(), updated.position.z(),
-                updated.velocity.norm(), keyframe_mark);
+                result.icp_correspondences, result.icp_error, updated.position.x(), updated.position.y(), updated.position.z(), updated.velocity.norm(),
+                keyframe_mark);
     }
 
     results_.push_back(std::move(result));

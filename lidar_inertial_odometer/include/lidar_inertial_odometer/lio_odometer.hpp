@@ -9,7 +9,7 @@
 #include "lidar_inertial_odometer/feature_extractor.hpp"
 #include "lidar_inertial_odometer/local_map.hpp"
 #include "lidar_inertial_odometer/util.hpp"
-#include "p2p_icp/icp_point_to_plane.hpp"
+#include "p2pt_icp/icp_point_to_point.hpp"
 
 /**
  * @brief LiDAR-Inertial Odometry core
@@ -18,7 +18,7 @@
  *                                          |
  *                                     initial_guess
  *                                          v
- *   LiDAR 10 Hz --> deskew --> FeatureExtractor --> IcpPointToPlane(local map)
+ *   LiDAR 10 Hz --> deskew --> FeatureExtractor --> IcpPointToPoint(local map)
  *                                          |
  *                                       T_icp --> state update
  *
@@ -73,7 +73,7 @@ public:
      *
      * @return the internal ICP instance
      */
-    p2p_icp::IcpPointToPlane& icp()
+    p2pt_icp::IcpPointToPoint& icp()
     {
         return icp_;
     }
@@ -223,7 +223,7 @@ private:
 
     LioOptions options_;
     FeatureExtractor feature_extractor_;
-    p2p_icp::IcpPointToPlane icp_;  ///< the point-to-plane-icp implementation, reused as is
+    p2pt_icp::IcpPointToPoint icp_;  ///< the point-to-point-icp implementation, reused as is
     LocalMap local_map_;
     imu_preint::ImuPreintegrator preintegrator_;
 

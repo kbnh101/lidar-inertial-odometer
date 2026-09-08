@@ -14,8 +14,16 @@ gps_ground_truth/         independent ament_cmake GPS reference node
 docker/                    Humble development container
 ```
 
-`main` contains the common ROS 2 migration and GPS separation, retaining the
-existing point-to-plane matcher. The matching variants branch from that common commit.
+This is the **point-to-point-icp** branch, based on the common ROS 2/GPS commit.
+LIO links `IcpPointToPoint` and minimizes `e = R x + t - y` (one 3D residual block
+per correspondence). Correspondence search uses distance only; no normal enters
+this matching cost or gate. Three non-collinear pairs are the minimum.
+The frontend voxel-downsamples all preprocessed, deskewed points without estimating
+or requiring normals. `normal_method` and normal-fitting parameters are unused by
+this branch's matching pipeline. The standalone matcher also accepts clouds without normals. The two-cloud convenience overload aligns
+centroids when no initial guess is supplied; explicit initial guesses (including LIO's
+IMU prediction) are used as provided. This avoids a local minimum in the supplied
+dense planar sample. Unusable Ceres solutions are rejected.
 
 ## Build and run
 
@@ -153,3 +161,29 @@ python3 src/lidar-inertial-odometer/lidar_inertial_odometer/scripts/plot_traject
 
 The ROS1 trajectory numbers are not a ROS2 benchmark; evaluate a full converted bag
 before comparing matching accuracy on real data.
+
+### Matching validation and known limitation
+
+The point-based branches use a stable-world-sample trajectory fixture for their
+registration integration check. Every sample still has a sweep timestamp and motion
+distortion, so this checks IMU prediction, deskew, ICP and state feedback together.
+The accuracy thresholds remain 3 cm relative position error and 0.5% drift. It uses
+PCA for the hybrid frontend because the fixture's ring labels are not physical scan
+lines. Normal estimation and deskew retain their separate ray-cast tests.
+
+The original moving ray-cast plane benchmark is preserved with its original strict
+thresholds and can be run explicitly:
+
+```bash
+LIO_RAYCAST_BENCHMARK=1 ./build/lidar_inertial_odometer/test_lio_core
+```
+
+**Known limitation:** it fails those plane-matcher accuracy thresholds for this
+branch. Re-sampling featureless surfaces changes the nearest point along each plane;
+a point residual penalizes that tangential sampling difference. The plane-only
+branch passes this benchmark. Passing the stable-sample fixture is not evidence of
+KITTI accuracy or parity with point-to-plane. No full real bag benchmark was run.
+
+Observed ray-cast benchmark after this frontend change: approximately 99.9% drift
+on the 15 m scene (both normal settings are unused). The stable-sample fixture gives
+0.13% drift and 1.06 cm maximum relative position error.

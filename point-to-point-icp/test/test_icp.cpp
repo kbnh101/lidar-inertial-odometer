@@ -1,7 +1,7 @@
 // Loads the provided source_point.txt / target_point.txt, estimates the relative pose between the
 // source and the target, and checks that the final error converges to 0 within numerical tolerance.
 //
-// These fail until IcpPointToPoint::do_icp() and PointToPointCostFunction::Evaluate() are written.
+// The no-prediction overload uses centroid translation initialization.
 
 #include <gtest/gtest.h>
 
@@ -10,6 +10,7 @@
 
 #include "common/point_cloud.hpp"
 #include "p2pt_icp/icp_point_to_point.hpp"
+#include "p2pt_icp/point_to_point_cost.hpp"
 
 namespace
 {
@@ -36,7 +37,7 @@ TEST(IcpPointToPoint, RecoversGroundtruthTransformFromFiles)
     EXPECT_NEAR(result.final_error, 0.0, kEpsilon);
 }
 
-TEST(IcpPointToPoint, RecoversAKnownTransformFromAnIdentityStart)
+TEST(IcpPointToPoint, RecoversAKnownTransformWithCentroidInitialization)
 {
     // Same cloud, displaced by a known pose: ICP must recover exactly that pose.
     const common::PointCloud source_points = common::load_point_cloud(data_path("source_point.txt"));
@@ -75,4 +76,43 @@ TEST(IcpPointToPoint, ThrowsOnEmptyClouds)
 
     icp.set_source(source_points);
     EXPECT_THROW(icp.do_icp(), std::runtime_error);
+}
+
+TEST(PointToPointMinimum, RecoversThreeNonCollinearPairsWithoutNormals)
+{
+    common::PointCloud source = {{Eigen::Vector3d(0, 0, 0), Eigen::Vector3d::Zero()},
+                                 {Eigen::Vector3d(2, 0, 0), Eigen::Vector3d::Zero()},
+                                 {Eigen::Vector3d(0, 3, 1), Eigen::Vector3d::Zero()}};
+    auto target = source;
+    const Eigen::Vector3d translation(0.1, -0.2, 0.05);
+    for (auto& point : target)
+        point.point += translation;
+    p2pt_icp::IcpPointToPoint icp;
+    const auto result = icp.do_icp(source, target);
+    EXPECT_TRUE(result.converged);
+    EXPECT_EQ(result.correspondences, 3);
+    EXPECT_LT((result.transform.translation() - translation).norm(), 1e-8);
+    EXPECT_LT(result.final_error, 1e-8);
+}
+
+TEST(PointToPointCost, AnalyticJacobianMatchesCentralDifference)
+{
+    p2pt_icp::PointToPointCostFunction cost({1, 2, 3}, {-.2, .3, 1});
+    double xi[6] = {.1, -.2, .3, .15, -.2, .1};
+    const double* parameters[] = {xi};
+    double residual[3], jacobian[18];
+    double* jacobians[] = {jacobian};
+    ASSERT_TRUE(cost.Evaluate(parameters, residual, jacobians));
+    for (int col = 0; col < 6; ++col)
+    {
+        const double original = xi[col];
+        double plus[3], minus[3];
+        xi[col] = original + 1e-6;
+        cost.Evaluate(parameters, plus, nullptr);
+        xi[col] = original - 1e-6;
+        cost.Evaluate(parameters, minus, nullptr);
+        xi[col] = original;
+        for (int row = 0; row < 3; ++row)
+            EXPECT_NEAR(jacobian[row * 6 + col], (plus[row] - minus[row]) / 2e-6, 1e-8);
+    }
 }

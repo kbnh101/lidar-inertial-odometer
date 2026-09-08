@@ -98,49 +98,15 @@ IcpResult IcpPointToPoint::do_icp(const Eigen::Isometry3d& initial_guess)
     IcpResult result;
     result.transform = initial_guess;
 
-    // TODO: implement the outer loop. The shape it should take, per iteration:
-    //
-    //   1. correspondences = find_correspondences(result.transform)
-    //      Stop if fewer than 3 pairs survive: point-to-point gives 3 constraints per pair, so
-    //      3 non-collinear pairs are the minimum for the 6 unknowns.
-    //
-    //   2. Fill an IcpIterationLog, and record error_before via evaluate_error().
-    //
-    //   3. Solve for the increment. Set up std::array<double, 6> xi{} at 0, optionally compute the
-    //      pivot (the centroid of the transformed source over the correspondences) when
-    //      options_.pivot_increment_at_centroid is set, then for every pair add
-    //
-    //        new PointToPointCostFunction(result.transform * source_[i].point - pivot,
-    //                                     target_[j].point - pivot)
-    //
-    //      to a ceres::Problem on xi.data(), with a ceres::HuberLoss when huber_delta > 0.
-    //      Solve with DENSE_QR + LEVENBERG_MARQUARDT and max_solver_iterations.
-    //
-    //   4. Compose the increment onto result.transform. The increment acts as
-    //      p -> R(p - pivot) + pivot + t, so its world translation is (pivot - R*pivot + t):
-    //
-    //        increment.linear() = common::euler_zyx_to_rotation(xi[3], xi[4], xi[5]);
-    //        increment.translation() = pivot - increment.linear() * pivot + Eigen::Vector3d(xi[0], xi[1], xi[2]);
-    //        result.transform = increment * result.transform;
-    //
-    //      Record delta_translation / delta_rotation and error_after, push the log, and update
-    //      result.iterations / result.correspondences.
-    //
-    //   5. Converge on a small step (translation_tolerance and rotation_tolerance) or a stalled
-    //      error (error_tolerance). Ceres' own termination_type is not enough: a new correspondence
-    //      set is a different objective, so the outer convergence must be judged here.
-    //
-    // Then re-pair the correspondences once more and report the final error, exactly as below.
-
     double previous_error = std::numeric_limits<double>::infinity();
 
     for (int iteration = 0; iteration < options_.max_iterations; ++iteration)
     {
         // --- 1. search the correspondences with the current estimate -----------
         const std::vector<Correspondence> correspondences = find_correspondences(result.transform);
-        if (static_cast<int>(correspondences.size()) < 6)
+        if (static_cast<int>(correspondences.size()) < 3)
         {
-            // With 6 unknowns and fewer than 6 constraints the problem is not solvable.
+            // At least three non-collinear point pairs are needed for a rigid transform.
             if (options_.verbose)
             {
                 std::printf("[icp] iteration %2d: only %zu correspondences, stopping\n", iteration, correspondences.size());
@@ -182,9 +148,7 @@ IcpResult IcpPointToPoint::do_icp(const Eigen::Isometry3d& initial_guess)
             // aligned frame, which is what makes xi = 0 mean "the current state".
             const Eigen::Vector3d source_point = result.transform * source_[correspondence.source_index].point - pivot;
             const Eigen::Vector3d target_point = target_[correspondence.target_index].point - pivot;
-            problem.AddResidualBlock(
-                    new PointToPointCostFunction(source_point, target_point),
-                    loss, xi.data());
+            problem.AddResidualBlock(new PointToPointCostFunction(source_point, target_point), loss, xi.data());
         }
 
         ceres::Solver::Options solver_options;
@@ -199,6 +163,12 @@ IcpResult IcpPointToPoint::do_icp(const Eigen::Isometry3d& initial_guess)
 
         ceres::Solver::Summary summary;
         ceres::Solve(solver_options, &problem, &summary);
+        if (!summary.IsSolutionUsable())
+        {
+            result.converged = false;
+            result.final_error = result.final_mean_abs_error = result.final_max_abs_error = std::numeric_limits<double>::infinity();
+            return result;
+        }
 
         // --- 3. compose the increment onto the accumulated pose ----------------
         // The increment acts as p -> R(p - pivot) + pivot + t, so the world frame translation is
@@ -253,7 +223,19 @@ IcpResult IcpPointToPoint::do_icp(const Eigen::Isometry3d& initial_guess)
 
 IcpResult IcpPointToPoint::do_icp(const common::PointCloud& source, const common::PointCloud& target)
 {
-    return do_icp(source, target, Eigen::Isometry3d::Identity());
+    if (source.empty() || target.empty())
+        throw std::runtime_error("ICP requires nonempty clouds");
+    // Without an external prediction, align centroids before nearest-neighbour search.
+    // This avoids tangential mismatches on densely sampled, translated planar patches.
+    Eigen::Vector3d source_centroid = Eigen::Vector3d::Zero();
+    Eigen::Vector3d target_centroid = Eigen::Vector3d::Zero();
+    for (const auto& point : source)
+        source_centroid += point.point;
+    for (const auto& point : target)
+        target_centroid += point.point;
+    Eigen::Isometry3d initial_guess = Eigen::Isometry3d::Identity();
+    initial_guess.translation() = target_centroid / target.size() - source_centroid / source.size();
+    return do_icp(source, target, initial_guess);
 }
 
 IcpResult IcpPointToPoint::do_icp(const common::PointCloud& source, const common::PointCloud& target, const Eigen::Isometry3d& initial_guess)

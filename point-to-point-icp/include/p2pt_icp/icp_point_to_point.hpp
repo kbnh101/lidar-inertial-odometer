@@ -126,7 +126,7 @@ public:
     IcpResult do_icp(const Eigen::Isometry3d& initial_guess = Eigen::Isometry3d::Identity());
 
     /**
-     * @brief Convenience overload setting both clouds and running, with an identity initial guess
+     * @brief Convenience overload setting both clouds and running, with centroid translation initialization
      *
      * @param source source cloud
      * @param target target cloud

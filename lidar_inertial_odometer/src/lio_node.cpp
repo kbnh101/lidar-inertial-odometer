@@ -181,13 +181,13 @@ public:
                 ++selected;
             }
         }
-        RCLCPP_INFO(get_logger(), "lidar_inertial_odometer ready");
+        RCLCPP_INFO(get_logger(), "lidar_inertial_odometer ready (point-to-point ICP)");
         RCLCPP_INFO(get_logger(), "  topics : lidar='%s' imu='%s'", lidar_topic_.c_str(), imu_topic_.c_str());
         RCLCPP_INFO(get_logger(), "  frames : %s -> %s -> %s", odom_frame_.c_str(), base_frame_.c_str(), lidar_frame_.c_str());
         RCLCPP_INFO(get_logger(), "  ring   : selection=%s band=[%d,%d] -> %d/%d ch (dropped %d above + %d below)",
                     ToString(feature_options.ring_selection).c_str(), feature_options.ring_min, feature_options.ring_max, selected,
                     feature_options.num_channels, feature_options.num_channels - 1 - feature_options.ring_max, feature_options.ring_min);
-        RCLCPP_INFO(get_logger(), "  normal : %s", ToString(feature_options.normal_method).c_str());
+        RCLCPP_INFO(get_logger(), "  input  : voxelized points (no normal estimation)");
     }
 
     ~LioNode()
@@ -318,11 +318,10 @@ private:
         map_options.crop_radius = Param<double>("map_crop_radius", 80.0);
         odometer_.local_map().set_options(map_options);
 
-        p2p_icp::IcpOptions icp_options = odometer_.icp().options();
+        p2pt_icp::IcpOptions icp_options = odometer_.icp().options();
         icp_options.max_iterations = Param<int>("icp_max_iterations", 12);
         icp_options.max_solver_iterations = Param<int>("icp_solver_iterations", 6);
         icp_options.max_correspondence_distance = Param<double>("icp_max_correspondence_distance", 1.5);
-        icp_options.min_normal_dot = Param<double>("icp_min_normal_dot", 0.5);
         icp_options.translation_tolerance = Param<double>("icp_translation_tolerance", 1e-4);
         icp_options.rotation_tolerance = Param<double>("icp_rotation_tolerance", 1e-5);
         icp_options.error_tolerance = Param<double>("icp_error_tolerance", 1e-6);

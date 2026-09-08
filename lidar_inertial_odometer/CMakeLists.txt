@@ -20,7 +20,7 @@ find_package(Eigen3 3.4 REQUIRED NO_MODULE)
 find_package(Ceres 2.1 REQUIRED)
 
 # ---------------------------------------------------------------------------
-# 공용 ICP 기하(점군 / kd-tree / 회전)와 point-to-plane-icp 를 소스째로 재사용한다.
+# 공용 ICP 기하(점군 / kd-tree / 회전)와 point-to-point-icp 를 소스째로 재사용한다.
 # 코드를 복사하지 않고 sibling 디렉토리를 참조해 단일 소스로 유지한다.
 # Dependencies remain ROS-free sibling CMake projects.
 # ---------------------------------------------------------------------------
@@ -42,20 +42,20 @@ target_include_directories(common_vendored PUBLIC ${COMMON_DIR}/include)
 target_link_libraries(common_vendored PUBLIC Eigen3::Eigen)
 set_target_properties(common_vendored PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-set(P2P_ICP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../point-to-plane-icp"
+set(P2PT_ICP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../point-to-point-icp"
     CACHE PATH "Checkout of the point-to-plane ICP project")
-if(NOT EXISTS "${P2P_ICP_DIR}/include/p2p_icp/icp_point_to_plane.hpp")
+if(NOT EXISTS "${P2PT_ICP_DIR}/include/p2pt_icp/icp_point_to_point.hpp")
   message(FATAL_ERROR
-    "point-to-plane-icp not found at '${P2P_ICP_DIR}'. "
-    "Set -DP2P_ICP_DIR=<path> to its checkout.")
+    "point-to-point-icp not found at '${P2PT_ICP_DIR}'. "
+    "Set -DP2PT_ICP_DIR=<path> to its checkout.")
 endif()
 
-add_library(p2p_icp_vendored STATIC
-  ${P2P_ICP_DIR}/src/icp_point_to_plane.cpp
+add_library(p2pt_icp_vendored STATIC
+  ${P2PT_ICP_DIR}/src/icp_point_to_point.cpp
 )
-target_include_directories(p2p_icp_vendored PUBLIC ${P2P_ICP_DIR}/include)
-target_link_libraries(p2p_icp_vendored PUBLIC common_vendored Eigen3::Eigen Ceres::ceres)
-set_target_properties(p2p_icp_vendored PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(p2pt_icp_vendored PUBLIC ${P2PT_ICP_DIR}/include)
+target_link_libraries(p2pt_icp_vendored PUBLIC common_vendored Eigen3::Eigen Ceres::ceres)
+set_target_properties(p2pt_icp_vendored PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 set(IMU_PREINT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../imu-preintegration"
     CACHE PATH "Checkout of the IMU preintegration project")
@@ -81,7 +81,7 @@ target_include_directories(lio_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
-target_link_libraries(lio_core PUBLIC common_vendored p2p_icp_vendored imu_preint_vendored Eigen3::Eigen)
+target_link_libraries(lio_core PUBLIC common_vendored p2pt_icp_vendored imu_preint_vendored Eigen3::Eigen)
 target_compile_options(lio_core PRIVATE -Wall -Wextra)
 
 add_executable(lio_node src/lio_node.cpp)
@@ -98,7 +98,7 @@ if(BUILD_TESTING)
 endif()
 
 install(TARGETS lio_node RUNTIME DESTINATION lib/${PROJECT_NAME})
-install(TARGETS lio_core common_vendored p2p_icp_vendored imu_preint_vendored
+install(TARGETS lio_core common_vendored p2pt_icp_vendored imu_preint_vendored
   ARCHIVE DESTINATION lib LIBRARY DESTINATION lib)
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch config rviz DESTINATION share/${PROJECT_NAME})
