@@ -8,6 +8,7 @@
 
 #include <Eigen/Geometry>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -463,6 +464,38 @@ struct PipelineOutcome
 
 const std::size_t kWarmupFrames = 5;
 
+// A registration integration fixture with stable world samples. Unlike ray casting,
+// corresponding samples persist across scans, so point residuals have an exact
+// solution. Keep the resampled-plane benchmark available separately (see README).
+std::vector<RawLidarPoint> MakeLandmarkScan(const SensorPoseProvider& sensor_pose)
+{
+    static const std::vector<Eigen::Vector3d> landmarks = []
+    {
+        std::vector<Eigen::Vector3d> points;
+        for (const auto& plane : MakeScene())
+        {
+            for (double u = -std::min(plane.half_u, 30.0) + 0.2; u < std::min(plane.half_u, 30.0); u += 0.5)
+                for (double v = -std::min(plane.half_v, 10.0) + 0.2; v < std::min(plane.half_v, 10.0); v += 0.5)
+                    points.push_back(plane.point + u * plane.axis_u + v * plane.axis_v);
+        }
+        return points;
+    }();
+    std::vector<RawLidarPoint> scan;
+    // Each sample is observed at its own sweep time, exercising deskew too.
+    std::array<Eigen::Isometry3d, 100> poses;
+    for (int i = 0; i < 100; ++i)
+        poses[i] = sensor_pose.PoseAt(i * 0.001).inverse();
+    for (std::size_t i = 0; i < landmarks.size(); ++i)
+    {
+        RawLidarPoint point;
+        point.position = poses[i % 100] * landmarks[i];
+        point.rel_time = (i % 100) * 0.001;
+        point.ring = 16 + i % 32;
+        scan.push_back(point);
+    }
+    return scan;
+}
+
 PipelineOutcome RunPipeline(NormalMethod method, bool enable_deskew)
 {
     GroundTruthMotion motion;
@@ -486,7 +519,7 @@ PipelineOutcome RunPipeline(NormalMethod method, bool enable_deskew)
     feature_options.min_range = 1.0;
     odometer.feature_extractor().set_options(feature_options);
 
-    p2p_icp::IcpOptions icp_options = odometer.icp().options();
+    p2ptpl_icp::IcpOptions icp_options = odometer.icp().options();
     icp_options.max_iterations = 15;
     icp_options.max_correspondence_distance = 1.5;
     icp_options.min_normal_dot = 0.5;
@@ -523,7 +556,8 @@ PipelineOutcome RunPipeline(NormalMethod method, bool enable_deskew)
         // that, no amount of ICP accuracy removes the resulting error floor.
         const imu_preint::NavState scan_start = truth;
         const MovingSensorPose scan_pose(motion, scan_start, options.T_imu_lidar, imu_dt);
-        odometer.AddLidarScan(scan_time, MakeSyntheticScan(scan_pose, 100 + scan_index));
+        const bool raycast_benchmark = std::getenv("LIO_RAYCAST_BENCHMARK") != nullptr;
+        odometer.AddLidarScan(scan_time, raycast_benchmark ? MakeSyntheticScan(scan_pose, 100 + scan_index) : MakeLandmarkScan(scan_pose));
 
         // A queued scan only runs once the IMU covers its sweep plus slack.
         std::vector<ImuSample> samples;
@@ -590,7 +624,12 @@ void TestOdometryPipeline()
 
     const int expected_frames = 38;  // initialization consumes up to 2 of the 40 scans
 
-    for (const NormalMethod method : {NormalMethod::kLoamCurvature, NormalMethod::kNeighborhoodPca})
+    // Landmark rings are synthetic, not scan lines: use the unstructured PCA
+    // frontend for this fixture. Both normal methods are tested on ray scans above.
+    const std::vector<NormalMethod> methods = std::getenv("LIO_RAYCAST_BENCHMARK")
+                                                      ? std::vector<NormalMethod>{NormalMethod::kLoamCurvature, NormalMethod::kNeighborhoodPca}
+                                                      : std::vector<NormalMethod>{NormalMethod::kNeighborhoodPca};
+    for (const NormalMethod method : methods)
     {
         const PipelineOutcome outcome = RunPipeline(method, true);
         std::printf(

@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>point_to_point_plane_icp</name>
+  <version>0.1.0</version>
+  <description>Ceres hybrid ICP with shared correspondence errors and separate point/plane residual blocks.</description>
+  <maintainer email="xnith101@gmail.com">chanho</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>eigen</depend>
+  <depend>ceres-solver</depend>
+  <test_depend>gtest_vendor</test_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

@@ -4,7 +4,7 @@
   <version>0.1.0</version>
   <description>
     LiDAR-Inertial Odometry (KITTI, ROS 2 Humble).
-    point-to-plane ICP와 IMU preintegration을 사용한 6-DoF odometry.
+    point-to-point-plane ICP와 IMU preintegration을 사용한 6-DoF odometry.
     ROS는 rosbag 입출력 인터페이스로만 사용하고 나머지는 모두 자체 class로 구현.
   </description>
   <maintainer email="xnith101@gmail.com">chanho</maintainer>
@@ -13,6 +13,7 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>rclcpp</depend>
+  <depend>point_to_point_plane_icp</depend>
   <depend>std_msgs</depend>
   <depend>eigen</depend>
   <depend>ceres-solver</depend>

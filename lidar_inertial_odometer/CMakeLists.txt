@@ -42,20 +42,7 @@ target_include_directories(common_vendored PUBLIC ${COMMON_DIR}/include)
 target_link_libraries(common_vendored PUBLIC Eigen3::Eigen)
 set_target_properties(common_vendored PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-set(P2P_ICP_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../point-to-plane-icp"
-    CACHE PATH "Checkout of the point-to-plane ICP project")
-if(NOT EXISTS "${P2P_ICP_DIR}/include/p2p_icp/icp_point_to_plane.hpp")
-  message(FATAL_ERROR
-    "point-to-plane-icp not found at '${P2P_ICP_DIR}'. "
-    "Set -DP2P_ICP_DIR=<path> to its checkout.")
-endif()
-
-add_library(p2p_icp_vendored STATIC
-  ${P2P_ICP_DIR}/src/icp_point_to_plane.cpp
-)
-target_include_directories(p2p_icp_vendored PUBLIC ${P2P_ICP_DIR}/include)
-target_link_libraries(p2p_icp_vendored PUBLIC common_vendored Eigen3::Eigen Ceres::ceres)
-set_target_properties(p2p_icp_vendored PROPERTIES POSITION_INDEPENDENT_CODE ON)
+find_package(point_to_point_plane_icp REQUIRED)
 
 set(IMU_PREINT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../imu-preintegration"
     CACHE PATH "Checkout of the IMU preintegration project")
@@ -81,7 +68,7 @@ target_include_directories(lio_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
 )
-target_link_libraries(lio_core PUBLIC common_vendored p2p_icp_vendored imu_preint_vendored Eigen3::Eigen)
+target_link_libraries(lio_core PUBLIC common_vendored point_to_point_plane_icp::p2ptpl_icp imu_preint_vendored Eigen3::Eigen)
 target_compile_options(lio_core PRIVATE -Wall -Wextra)
 
 add_executable(lio_node src/lio_node.cpp)
@@ -98,7 +85,7 @@ if(BUILD_TESTING)
 endif()
 
 install(TARGETS lio_node RUNTIME DESTINATION lib/${PROJECT_NAME})
-install(TARGETS lio_core common_vendored p2p_icp_vendored imu_preint_vendored
+install(TARGETS lio_core common_vendored imu_preint_vendored
   ARCHIVE DESTINATION lib LIBRARY DESTINATION lib)
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch config rviz DESTINATION share/${PROJECT_NAME})
