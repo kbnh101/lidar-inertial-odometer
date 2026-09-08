@@ -3,16 +3,16 @@
 # 이미 떠 있는 clobot_assignment 컨테이너에 접속한다. (터미널 여러 개 열 때 사용)
 #
 #   ./exec.sh                       ROS 가 source 된 bash 쉘로 진입
-#   ./exec.sh roscore               컨테이너 안에서 명령 하나만 실행
-#   ./exec.sh rviz                  rviz 실행
+#   ./exec.sh ros2 topic list               컨테이너 안에서 명령 하나만 실행
+#   ./exec.sh rviz2                  rviz 실행
 #   ./exec.sh --root                root 로 진입 (apt install 등)
 #
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-CONTAINER="${CONTAINER:-clobot_assignment}"
-WS_SRC=/home/clobot_assignment/dev_ws/src
+CONTAINER="${CONTAINER:-clobot_assignment_humble}"
+WS_SRC=/home/clobot_assignment/dev_ws
 
 log() { printf '\033[1;32m[exec.sh]\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[exec.sh]\033[0m %s\n' "$*" >&2; exit 1; }
@@ -55,5 +55,5 @@ else
         -e DISPLAY="${DISPLAY:-}" \
         -e TERM="${TERM:-xterm-256color}" \
         -w "${WS_SRC}" \
-        "${CONTAINER}" bash -lc "$*"
+        "${CONTAINER}" bash -lc 'exec "$@"' bash "$@"
 fi

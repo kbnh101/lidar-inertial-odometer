@@ -7,3 +7,10 @@ point-to-point-icp/build-debug/
 point-to-plane-icp/build/
 point-to-plane-icp/build-debug/
 common/build/
+**/build/
+**/install/
+**/log/
+**/__pycache__/
+*.pyc
+*.db3
+*.mcap

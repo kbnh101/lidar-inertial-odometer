@@ -1,5 +1,5 @@
 Panels:
-  - Class: rviz/Displays
+  - Class: rviz_common/Displays
     Help Height: 0
     Name: Displays
     Property Tree Widget:
@@ -9,7 +9,7 @@ Panels:
         - /scan 32ch (ring)1
       Splitter Ratio: 0.5
     Tree Height: 700
-  - Class: rviz/Views
+  - Class: rviz_common/Views
     Expanded:
       - /Current View1
     Name: Views
@@ -19,7 +19,7 @@ Visualization Manager:
   Displays:
     - Alpha: 0.3
       Cell Size: 10
-      Class: rviz/Grid
+      Class: rviz_default_plugins/Grid
       Color: 120; 120; 120
       Enabled: true
       Line Style:
@@ -36,7 +36,7 @@ Visualization Manager:
       Reference Frame: <Fixed Frame>
       Value: true
 
-    - Class: rviz/TF
+    - Class: rviz_default_plugins/TF
       Enabled: true
       Frame Timeout: 15
       Frames:
@@ -64,7 +64,7 @@ Visualization Manager:
         Value: true
       Axis: Z
       Channel Name: intensity
-      Class: rviz/PointCloud2
+      Class: rviz_default_plugins/PointCloud2
       Color: 255; 255; 255
       Color Transformer: AxisColor
       Decay Time: 0
@@ -79,7 +79,12 @@ Visualization Manager:
       Size (Pixels): 3
       Size (m): 0.15
       Style: Flat Squares
-      Topic: /lidar_inertial_odometer/submap
+      Topic:
+        Value: /lidar_inertial_odometer/submap
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Depth: 5
       Unreliable: false
       Use Fixed Frame: true
       Use rainbow: true
@@ -98,7 +103,7 @@ Visualization Manager:
         Value: true
       Axis: Z
       Channel Name: ring
-      Class: rviz/PointCloud2
+      Class: rviz_default_plugins/PointCloud2
       Color: 255; 255; 255
       Color Transformer: Intensity
       Decay Time: 0
@@ -113,7 +118,12 @@ Visualization Manager:
       Size (Pixels): 3
       Size (m): 0.08
       Style: Points
-      Topic: /lidar_inertial_odometer/scan
+      Topic:
+        Value: /lidar_inertial_odometer/scan
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 5
       Unreliable: false
       Use Fixed Frame: true
       Use rainbow: true
@@ -126,7 +136,7 @@ Visualization Manager:
       Autocompute Intensity Bounds: true
       Axis: Z
       Channel Name: intensity
-      Class: rviz/PointCloud2
+      Class: rviz_default_plugins/PointCloud2
       Color: 255; 200; 0
       Color Transformer: FlatColor
       Decay Time: 0
@@ -141,7 +151,12 @@ Visualization Manager:
       Size (Pixels): 4
       Size (m): 0.2
       Style: Flat Squares
-      Topic: /lidar_inertial_odometer/features
+      Topic:
+        Value: /lidar_inertial_odometer/features
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 5
       Unreliable: false
       Use Fixed Frame: true
       Use rainbow: true
@@ -154,7 +169,7 @@ Visualization Manager:
       Autocompute Intensity Bounds: true
       Axis: Z
       Channel Name: ring
-      Class: rviz/PointCloud2
+      Class: rviz_default_plugins/PointCloud2
       Color: 100; 100; 100
       Color Transformer: FlatColor
       Decay Time: 0
@@ -169,7 +184,12 @@ Visualization Manager:
       Size (Pixels): 1
       Size (m): 0.05
       Style: Points
-      Topic: /points_raw
+      Topic:
+        Value: /points_raw
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 5
       Unreliable: false
       Use Fixed Frame: true
       Use rainbow: true
@@ -177,7 +197,7 @@ Visualization Manager:
 
     - Alpha: 1
       Buffer Length: 1
-      Class: rviz/Path
+      Class: rviz_default_plugins/Path
       Color: 0; 255; 0
       Enabled: true
       Head Diameter: 0
@@ -195,13 +215,18 @@ Visualization Manager:
       Radius: 0.03
       Shaft Diameter: 0.1
       Shaft Length: 0.1
-      Topic: /lidar_inertial_odometer/path
+      Topic:
+        Value: /lidar_inertial_odometer/path
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Depth: 5
       Unreliable: false
       Value: true
 
     - Alpha: 1
       Buffer Length: 1
-      Class: rviz/Path
+      Class: rviz_default_plugins/Path
       Color: 255; 40; 40
       Enabled: true
       Head Diameter: 0
@@ -219,12 +244,17 @@ Visualization Manager:
       Radius: 0.03
       Shaft Diameter: 0.1
       Shaft Length: 0.1
-      Topic: /lidar_inertial_odometer/gt_path
+      Topic:
+        Value: /gps_ground_truth/path
+        Reliability Policy: Reliable
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Depth: 5
       Unreliable: false
       Value: true
 
     - Angle Tolerance: 0.1
-      Class: rviz/Odometry
+      Class: rviz_default_plugins/Odometry
       Covariance:
         Orientation:
           Alpha: 0.5
@@ -254,7 +284,12 @@ Visualization Manager:
         Shaft Length: 1
         Shaft Radius: 0.05
         Value: Axes
-      Topic: /lidar_inertial_odometer/odometry
+      Topic:
+        Value: /lidar_inertial_odometer/odometry
+        Reliability Policy: Reliable
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Depth: 5
       Unreliable: false
       Value: true
 
@@ -266,16 +301,16 @@ Visualization Manager:
     Frame Rate: 30
   Name: root
   Tools:
-    - Class: rviz/Interact
+    - Class: rviz_default_plugins/Interact
       Hide Inactive Objects: true
-    - Class: rviz/MoveCamera
-    - Class: rviz/Select
-    - Class: rviz/FocusCamera
-    - Class: rviz/Measure
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
   Value: true
   Views:
     Current:
-      Class: rviz/Orbit
+      Class: rviz_default_plugins/Orbit
       Distance: 80
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.06

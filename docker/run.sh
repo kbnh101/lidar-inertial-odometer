@@ -7,8 +7,8 @@
 #   ./run.sh --rebuild    이미지를 새로 빌드 (기존 컨테이너는 제거 후 재생성)
 #   ./run.sh --recreate   이미지는 그대로 두고 컨테이너만 재생성
 #
-# docs/ 를 뺀 최상위 디렉토리 전부를 컨테이너의
-#   /home/clobot_assignment/dev_ws/src/<dir>
+# 저장소 전체를 컨테이너의
+#   /home/clobot_assignment/dev_ws/src/lidar-inertial-odometer
 # 로 bind-mount 하며, rviz 를 위한 X11 / GPU / ROS 네트워크 옵션을 함께 준다.
 #
 set -euo pipefail
@@ -17,8 +17,8 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # 이 스크립트는 <repo>/docker/ 에 있고, 마운트 대상은 그 상위인 <repo> 다.
 REPO_ROOT="${REPO_ROOT:-$(cd "${HERE}/.." && pwd)}"
 
-IMAGE="${IMAGE:-clobot_assignment:noetic}"
-CONTAINER="${CONTAINER:-clobot_assignment}"
+IMAGE="${IMAGE:-clobot_assignment:humble}"
+CONTAINER="${CONTAINER:-clobot_assignment_humble}"
 CONTAINER_USER="${CONTAINER_USER:-clobot}"
 WS_ROOT=/home/clobot_assignment/dev_ws
 WS_SRC="${WS_ROOT}/src"
@@ -96,34 +96,12 @@ else
     log "경고: DISPLAY 가 비어 있습니다. rviz 같은 GUI 는 뜨지 않습니다."
 fi
 
-# ---------------------------------------------------------------------------
-# 3. 마운트 목록 (docs 제외한 최상위 디렉토리 전부)
-# ---------------------------------------------------------------------------
-MOUNTS=()
-MOUNTED_NAMES=()
-for path in "${REPO_ROOT}"/*/; do
-    name="$(basename "${path}")"
-    skip=0
-    for ex in "${EXCLUDE_DIRS[@]}"; do
-        [ "${name}" = "${ex}" ] && skip=1
-    done
-    [ "${skip}" -eq 1 ] && continue
-    MOUNTS+=( -v "${REPO_ROOT}/${name}:${WS_SRC}/${name}" )
-    MOUNTED_NAMES+=( "${name}" )
-done
-[ "${#MOUNTS[@]}" -eq 0 ] && die "마운트할 디렉토리가 없습니다: ${REPO_ROOT}"
-
-# .clang-format 은 repo 루트에 있는데 src 디렉토리 자체는 마운트하지 않으므로
-# (하위 폴더만 마운트한다) 이 파일만 따로 넣어 준다. 컨테이너 안에서
-# clang-format 을 돌려도 호스트와 같은 규칙이 적용된다.
-if [ -f "${REPO_ROOT}/.clang-format" ]; then
-    MOUNTS+=( -v "${REPO_ROOT}/.clang-format:${WS_SRC}/.clang-format:ro" )
-fi
-
-# 빌드 산출물(devel/, build_isolated/ 등)은 호스트를 더럽히지 않도록
-# named volume 에 담아둔다. 컨테이너를 지워도 재빌드 캐시가 남는다.
-MOUNTS+=( -v "${CONTAINER}_ws_build:${WS_ROOT}/build" )
-MOUNTS+=( -v "${CONTAINER}_ws_devel:${WS_ROOT}/devel" )
+# Mount the whole checkout so new packages appear without recreating the container.
+MOUNTS=( -v "${REPO_ROOT}:${WS_SRC}/lidar-inertial-odometer"
+         -v "${CONTAINER}_ws_build:${WS_ROOT}/build"
+         -v "${CONTAINER}_ws_install:${WS_ROOT}/install"
+         -v "${CONTAINER}_ws_log:${WS_ROOT}/log" )
+MOUNTED_NAMES=("lidar-inertial-odometer")
 
 # ---------------------------------------------------------------------------
 # 4. GPU / OpenGL (rviz 렌더링)
@@ -193,13 +171,13 @@ if ! docker container inspect "${CONTAINER}" >/dev/null 2>&1; then
         --security-opt seccomp=unconfined \
         --ulimit nofile=65536:65536 \
         -e TERM="${TERM:-xterm-256color}" \
-        -e ROS_MASTER_URI="${ROS_MASTER_URI:-http://localhost:11311}" \
-        -e ROS_HOSTNAME="${ROS_HOSTNAME:-localhost}" \
+        -e ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}" \
+        -e ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-0}" \
         -v /etc/localtime:/etc/localtime:ro \
         "${X11_OPTS[@]}" \
         "${MOUNTS[@]}" \
         "${GPU_OPTS[@]}" \
-        -w "${WS_SRC}" \
+        -w "${WS_ROOT}" \
         "${IMAGE}" \
         bash >/dev/null
 fi

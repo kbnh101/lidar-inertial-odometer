@@ -9,29 +9,20 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-find_package(catkin REQUIRED COMPONENTS
-  roscpp
-  sensor_msgs
-  nav_msgs
-  geometry_msgs
-  tf2
-  tf2_ros
-)
-
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(tf2_ros REQUIRED)
 find_package(Eigen3 3.4 REQUIRED NO_MODULE)
 find_package(Ceres 2.1 REQUIRED)
-
-catkin_package(
-  INCLUDE_DIRS include
-  LIBRARIES lio_core
-  CATKIN_DEPENDS roscpp sensor_msgs nav_msgs geometry_msgs tf2 tf2_ros
-  DEPENDS EIGEN3 CERES
-)
 
 # ---------------------------------------------------------------------------
 # 공용 ICP 기하(점군 / kd-tree / 회전)와 point-to-plane-icp 를 소스째로 재사용한다.
 # 코드를 복사하지 않고 sibling 디렉토리를 참조해 단일 소스로 유지한다.
-# catkin workspace 에서는 <ws>/src/{common,point-to-plane-icp} 가 된다.
+# Dependencies remain ROS-free sibling CMake projects.
 # ---------------------------------------------------------------------------
 set(COMMON_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../common"
     CACHE PATH "Checkout of the shared ICP geometry project")
@@ -94,27 +85,22 @@ target_link_libraries(lio_core PUBLIC common_vendored p2p_icp_vendored imu_prein
 target_compile_options(lio_core PRIVATE -Wall -Wextra)
 
 add_executable(lio_node src/lio_node.cpp)
-target_include_directories(lio_node PRIVATE ${catkin_INCLUDE_DIRS})
-target_link_libraries(lio_node PRIVATE lio_core ${catkin_LIBRARIES})
+target_link_libraries(lio_node lio_core)
+ament_target_dependencies(lio_node rclcpp sensor_msgs nav_msgs geometry_msgs std_msgs tf2_ros)
 target_compile_options(lio_node PRIVATE -Wall -Wextra)
 
-option(LIO_BUILD_TESTS "Build the lio_core self-check" ON)
-if(LIO_BUILD_TESTS)
+if(BUILD_TESTING)
+  enable_testing()
   add_executable(test_lio_core test/test_lio_core.cpp)
   target_link_libraries(test_lio_core PRIVATE lio_core)
   target_compile_options(test_lio_core PRIVATE -Wall -Wextra)
-  set_target_properties(test_lio_core PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY ${CATKIN_DEVEL_PREFIX}/${CATKIN_PACKAGE_BIN_DESTINATION})
+  add_test(NAME test_lio_core COMMAND test_lio_core)
 endif()
 
-install(TARGETS lio_node
-  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+install(TARGETS lio_node RUNTIME DESTINATION lib/${PROJECT_NAME})
 install(TARGETS lio_core common_vendored p2p_icp_vendored imu_preint_vendored
-  ARCHIVE DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION}
-  LIBRARY DESTINATION ${CATKIN_PACKAGE_LIB_DESTINATION})
-install(DIRECTORY include/${PROJECT_NAME}/
-  DESTINATION ${CATKIN_PACKAGE_INCLUDE_DESTINATION})
-install(DIRECTORY launch config rviz
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
-install(PROGRAMS scripts/plot_trajectory.py
-  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+  ARCHIVE DESTINATION lib LIBRARY DESTINATION lib)
+install(DIRECTORY include/ DESTINATION include)
+install(DIRECTORY launch config rviz DESTINATION share/${PROJECT_NAME})
+install(PROGRAMS scripts/plot_trajectory.py DESTINATION lib/${PROJECT_NAME})
+ament_package()

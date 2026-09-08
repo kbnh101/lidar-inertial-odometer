@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>gps_ground_truth</name>
+  <version>0.1.0</version>
+  <description>Independent GPS position reference trajectory with KITTI local Mercator projection.</description>
+  <maintainer email="xnith101@gmail.com">chanho</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>eigen</depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

@@ -1,315 +1,155 @@
-# Point-to-Plane,Point ICP / IMU Preintegration / LiDAR-Inertial Odometry
+# LiDAR–Inertial Odometry: ROS 2 and Ceres ICP
 
-Three connected pieces: a point-to-plane ICP solved with Ceres on an analytic Jacobian, an IMU
-preintegration class, and a LiDAR-inertial odometry that runs both on a KITTI bag.
-
-**Environment** — Ceres 2.1.0, Eigen 3.4.0, C++17, ROS1 Noetic (part 3 only).
-
-```text
-src/
-├── icp-common/              # shared ICP geometry -- cloud type, kd-tree, Euler angles
-├── point-to-plane-icp/      # part 1 -- standalone CMake project, no ROS
-├── point-to-point-icp/      # point-to-point variant, same layout
-├── imu-preintegration/      # part 2 -- standalone CMake project, no ROS
-├── lidar_inertial_odometer/ # part 3 -- catkin package, uses the above
-├── data/                    # 2011_09_30_drive_0028.bag + the sample clouds
-├── docs/                    # assignment and the hand derivations
-└── docker/                  # dev container (run.sh / exec.sh)
-```
-
-Every library here is ROS-free; ROS appears only in part 3's node. Nothing is copied between
-packages -- each one references its dependencies by source from CMake, so there is a single copy of
-every file. The dependency order is:
+ROS 2 Humble (Ubuntu 22.04), C++17, Eigen 3.4, Ceres >= 2.1.
+The odometry algorithms remain ROS-free. ROS 2 supplies messages, parameters, TF,
+launch, rosbag2 playback and RViz2. GPS reference generation is an independent package.
 
 ```text
-icp-common ──┬──► point-to-plane-icp ──┐
-             └──► point-to-point-icp   ├──► lidar_inertial_odometer
-                  imu-preintegration ──┘
+common/                    shared geometry, point cloud, kd-trees, Euler derivatives
+imu-preintegration/        ROS-free IMU preintegration
+point-to-plane-icp/         ROS-free point-to-plane Ceres ICP
+point-to-point-icp/         ROS-free point-to-point Ceres ICP
+lidar_inertial_odometer/    ament_cmake ROS 2 interface + ROS-free lio_core
+gps_ground_truth/         independent ament_cmake GPS reference node
+docker/                    Humble development container
 ```
 
-`icp-common` holds what the two ICP variants share and nothing else: the `PointNormal` / `PointCloud`
-types with their text loader, the 1-NN kd-tree, and the Z-Y-X Euler helpers with their three
-derivatives. Each ICP package then contains only what actually differs -- its cost function and its
-loop. Its own suite ([test_icp_common.cpp](icp-common/test/test_icp_common.cpp), 11 tests) checks the
-kd-tree against brute force and the rotation derivatives against central differences.
+`main` contains the common ROS 2 migration and GPS separation, retaining the
+existing point-to-plane matcher. The matching variants branch from that common commit.
 
----
+## Build and run
 
-## Part 1 — Point-to-Plane ICP
-
-### Residual
-
-The error vector of one correspondence, and the residual it reduces to:
-
-```text
-e_n = R(theta) x_n + t - y_n           R(theta) = Rz(gamma) Ry(beta) Rx(alpha)
-r_n = n_y^T e_n
-```
-
-`r_n` is a 1-D scalar, the signed distance from the transformed source point to the tangent plane of
-its target point. Only the **target** normal `n_y` appears — the source normal is used nowhere in the
-residual, only to reject correspondences whose normals disagree.
-
-### Jacobian
-
-The parameter block is `xi = [tx, ty, tz, alpha, beta, gamma]^T`, so the Jacobian is one row:
-
-```text
-J_n = [ n_y.x, n_y.y, n_y.z,
-        n_y^T (dR/dalpha) x_n, n_y^T (dR/dbeta) x_n, n_y^T (dR/dgamma) x_n ]  in R^{1x6}
-```
-
-The translation block is just `n_y^T`, since `de/dt = I`. The three rotation derivatives are expanded
-entry by entry in [rotation.cpp](icp-common/src/rotation.cpp).
-
-| Formula | Code in `PointToPlaneCostFunction::Evaluate()` |
-|---|---|
-| `r_n = n_y^T(R x_n + t - y_n)` | `residuals[0] = target_normal_.dot(rotation * source_point_ + translation - target_point_);` |
-| `dr/dt = n_y^T` | `jacobian[0..2] = target_normal_.x(), .y(), .z();` |
-| `dr/dalpha = n_y^T(dR/dalpha)x_n` | `jacobian[3] = target_normal_.dot(rotation_derivative_alpha(a,b,g) * source_point_);` |
-| `dr/dbeta = n_y^T(dR/dbeta)x_n` | `jacobian[4] = target_normal_.dot(rotation_derivative_beta(a,b,g) * source_point_);` |
-| `dr/dgamma = n_y^T(dR/dgamma)x_n` | `jacobian[5] = target_normal_.dot(rotation_derivative_gamma(a,b,g) * source_point_);` |
-
-`AutoDiffCostFunction` and `NumericDiffCostFunction` are not used — the Jacobian above is written out
-by hand in `Evaluate()`.
-
-### The ICP loop
-
-Each outer iteration relinearizes: transform the source by the current pose, search correspondences
-again, then let Ceres solve for an **increment** `xi` starting from 0.
-
-Two details worth knowing:
-
-- **Increment, not absolute pose.** Restarting `xi` from 0 each iteration keeps the Euler angles near
-  0, so `beta = ±pi/2` gimbal lock is never reached.
-- **Rotation pivot at the centroid.** Rotating about the source centroid instead of the origin leaves
-  the residual and the Jacobian unchanged, but decorrelates the rotation columns of `J` from the
-  translation columns. On the provided data `cond(J^T J)` drops from 7.3e5 to 9.2.
-
-Correspondences are rejected on distance and on normal disagreement, and the outer loop stops on a
-small step or a stalled error. Ceres' own `termination_type` is not enough, because a new
-correspondence set is a different objective.
-
-| Requirement | Where |
-|---|---|
-| `ceres::SizedCostFunction` subclass, residual + analytic Jacobian in `Evaluate()` | [point_to_plane_cost.hpp](point-to-plane-icp/include/p2p_icp/point_to_plane_cost.hpp) |
-| source / target input interface | `IcpPointToPlane::set_source() / set_target() / do_icp()` — [icp_point_to_plane.hpp](point-to-plane-icp/include/p2p_icp/icp_point_to_plane.hpp) |
-| nearest-neighbour correspondence search | hand-written kd-tree — [kdtree.hpp](icp-common/include/icp_common/kdtree.hpp) |
-| pose optimization / convergence / iteration | [icp_point_to_plane.cpp](point-to-plane-icp/src/icp_point_to_plane.cpp) |
-| final relative pose (R, t) | `IcpResult::transform` (`Eigen::Isometry3d`) |
-| test code | [test/test_icp.cpp](point-to-plane-icp/test/test_icp.cpp) |
-
-### Build and run
+The directories above must remain siblings inside this checkout. From the workspace
+containing the checkout under `src/`:
 
 ```bash
-cd point-to-plane-icp
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j$(nproc)
-
-./build/icp_demo           # demo output
-ctest --test-dir build -V  # or ./build/test_icp
+source /opt/ros/humble/setup.bash
+colcon build --packages-select gps_ground_truth lidar_inertial_odometer \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+source install/setup.bash
+ros2 launch lidar_inertial_odometer kitti_lio.launch.py play:=false
 ```
 
-Needs C++17, CMake ≥ 3.16, Eigen 3.4, Ceres ≥ 2.1, and GoogleTest for the test. Without GoogleTest
-only the test target is skipped. `icp-common` is picked up from the sibling directory; override it
-with `-DICP_COMMON_DIR=/path/to/icp-common`.
-
-A point-to-point variant lives beside it in [point-to-point-icp/](point-to-point-icp/), built the
-same way. It minimizes `|R x_n + t - y_n|^2`, so its residual is the full 3-D error vector rather
-than its projection onto the target normal, and its Jacobian is 3x6 instead of 1x6.
-
-### Result
-
-```text
-iter  corr     rms error before [m]     rms error after [m]      |dt| [m]     |dR| [rad]
---------------------------------------------------------------------------------------------
-0     300      1.601561737804692e-01    3.372609504156267e-02    2.5103e-01   5.1514e-03
-1     300      1.766086787058824e-02    1.776356839400250e-15    8.0936e-02   5.1514e-03
-2     300      1.776356839400250e-15    0.000000000000000e+00    3.0762e-15   6.0142e-19
-
-converged            : yes after 3 iteration(s)
-final correspondences: 300 / 300 source points
-final error (rms)    : 0.000000000000000e+00 [m]
-
-final relative pose (source -> target):
-  t = [-0.200000000000, -0.200000000000, -0.000000000000]  [m]
-  euler ZYX (alpha, beta, gamma) = [ 0.000000000000, -0.000000000000,  0.000000000000]  [rad]
-  R = I
-```
-
-It recovers the ground truth `t = (-0.2, -0.2, 0.0)` and converges to `final_error` of 0 (or 1e-16
-order), far tighter than the test's `kEpsilon = 1e-6`. Full output in
-[docs/run_output.txt](point-to-plane-icp/docs/run_output.txt) and
-[docs/test_output.txt](point-to-plane-icp/docs/test_output.txt).
-
-> The `error after` of `iter 0` (3.37e-2) differing from the `error before` of `iter 1` (1.77e-2) is
-> expected: the correspondences are re-searched between the two, so they are errors over different
-> correspondence sets.
-
----
-
-## Part 2 — IMU Preintegration
-
-### What it computes
-
-Naively accumulating the discrete kinematics from `k = i` to `j-1` leaves the absolute state `R_k` on
-the right hand side, so every change of `R_i` during optimization forces a re-integration. Defining
-relative quantities instead removes it:
-
-```text
-dR_ij = R_i^T R_j                                 = prod_k Exp([w_k dt]x)
-dv_ij = R_i^T (v_j - v_i - g dt)                  = sum_k dR_ik a_k dt
-dp_ij = R_i^T (p_j - p_i - v_i dt - 0.5 g dt^2)   = sum_k [ dv_ik dt + 0.5 dR_ik a_k dt^2 ]
-```
-
-Neither the absolute state nor gravity survives on the right, so the integration never has to be
-redone. They reappear only in `predict()`, which solves the same definitions for `R_j, v_j, p_j`.
-
-### Implementation
-
-[`imu_preint::ImuPreintegrator`](imu-preintegration/include/imu_preint/imu_preintegrator.hpp)
-implements this directly, and part 3's odometry uses it.
-
-- Integrated as a recursion rather than as sums. The order `dp -> dv -> dR` matters, because `dp` and
-  `dv` must both read the pre-update `dR`.
-- `dR` is re-projected onto SO(3) every step, so numerical drift cannot break orthogonality.
-- `delta_at(t)` returns the partial delta at any time inside the interval, which is what deskewing
-  queries per point (slerp for rotation, linear for the rest).
-- The SO(3) helpers (`Hat`, `Exp`, `Log`) are written out in
-  [so3.hpp](imu-preintegration/include/imu_preint/so3.hpp), and the state types
-  (`NavState`, `PreintegratedDelta`) in [types.hpp](imu-preintegration/include/imu_preint/types.hpp).
-
-The package holds nothing else — no ROS, no Ceres, only Eigen.
-
-### Build and run
+Ceres 2.1 is required; Ubuntu 22.04's default Ceres 2.0 package is too old.
+The Dockerfile builds Ceres 2.1 from source and installs Eigen 3.4 from apt.
 
 ```bash
-cd imu-preintegration
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j$(nproc)
-
-ctest --test-dir build -V  # or ./build/test_imu_preintegration
+./docker/run.sh -d
+./docker/exec.sh
+# In the container, at /home/clobot_assignment/dev_ws:
+colcon build --packages-select gps_ground_truth lidar_inertial_odometer \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+source install/setup.bash
 ```
 
-Needs C++17, CMake ≥ 3.16, Eigen 3.4, and GoogleTest for the test.
+The Humble image/container use separate names and build/install volumes from the
+old Noetic container. The entire checkout is mounted, so new packages and Git branch
+changes appear in the container. Rebuild after switching branches. `--rebuild`
+rebuilds the image; `--recreate` recreates its container.
 
-### Tests
-
-[test_imu_preintegration.cpp](imu-preintegration/test/test_imu_preintegration.cpp) compares the class
-against a direct integration of the kinematics, on noise-free samples from a constant turn rate with
-a constant body acceleration.
-
-| Test | What it pins down |
-|---|---|
-| `DeltasMatchTheirDefinitions` | the recursion reproduces `dR_ij`, `dv_ij`, `dp_ij` as defined above |
-| `PredictReproducesTheTrueState` | `predict()` recovers the truth to 1e-9 |
-| `DeltaIsIndependentOfTheAbsoluteState` | a completely different state `i` still satisfies the definitions, without re-integrating |
-| `DeltaAtMatchesAnIntegrationUpToThatTime` | the partial query deskewing relies on is exact at a step boundary |
-| `DeltaAtClampsOutsideTheInterval` | queries before or after the interval saturate instead of extrapolating |
-| `RotationStaysOrthonormal` | the per-step re-projection holds `dR` in SO(3) |
-| `ResetLeavesTheIdentityDelta` / `NonPositiveDtIsIgnored` | reset and guard behaviour |
-| `DeltaAtOnAnEmptyIntervalIsTheIdentity` / `ZeroMotionPredictsFreeFall` | edge cases |
-
----
-
-## Part 3 — LiDAR-Inertial Odometry (KITTI)
-
-### Pipeline
-
-```text
-IMU 100 Hz ──► imu_queue_ ──► ImuPreintegrator ──► predicted pose ──┐
-                                     ▲                              │ initial_guess
-                                     │ velocity update              ▼
-LiDAR 10 Hz ──► scan_queue_ ──► deskew ──► FeatureExtractor ──► IcpPointToPlane(local map)
-                                                                    │
-                                                                 T_icp ──► state update
-```
-
-Both inputs are queues. `AddImu()` and `AddLidarScan()` append to their queue and then process
-whatever has become ready. A scan is ready once the IMU queue reaches the **end of that scan's
-sweep**, since deskewing needs the motion across the whole sweep — that IMU arrives around the time
-of the next scan, which is the one frame of latency seen when replaying a rosbag.
-
-Per scan: preintegrate the IMU into a predicted pose → preprocess (64 → 32 channels) → deskew →
-planar features + PCA normals → scan-to-map point-to-plane ICP against the local map → update the
-state → add to the local map if it is a keyframe.
-
-### The pieces
-
-- **Preprocessing.** `ring` selects the channel band; the default keeps the middle 32 of the 64
-  channels. Range, height and NaN filters run here too, and `ring` / `rel_time` are recovered from
-  the vertical angle and azimuth when the bag lacks those fields.
-- **Deskew.** Each point is moved back into the lidar frame at the scan start time. Because `dp` is
-  by definition free of gravity and initial velocity, both are added back to recover the displacement
-  the vehicle actually travelled.
-- **Normals.** KITTI clouds carry none, but point-to-plane ICP needs one per target point. Two
-  methods: LOAM scan-line curvature, or neighbourhood covariance PCA (default). Both fit the normal
-  by PCA over a fixed-radius neighbourhood, and accept it only when the plane residual `sqrt(l0)` is
-  small and `l0/l1` says the normal direction is unique.
-- **Local map.** A sliding window of keyframes, merged and voxel downsampled, is the ICP target. A
-  window rather than a global map keeps the kd-tree size constant and stops drifted old observations
-  from pulling on the current registration.
-- **ICP gating.** A result too far from the IMU prediction is dropped in favour of the prediction.
-- **Velocity feedback.** The ICP position residual corrects `v_i`. Its lever arm is `dt + T/2`, not
-  `dt`, because deskewing removes `R_i^T v tau` per point and so shrinks the displacement ICP reports;
-  using `dt` would inflate the gain by 1.5x on KITTI and make the velocity oscillate.
-
-| Requirement | Implementation |
-|---|---|
-| preprocess 64-channel LiDAR down to ~32 | `FeatureExtractor::Preprocess()` selects by `ring`; default drops 16 below and 16 above |
-| IMU preintegration written as a class | [`imu_preint::ImuPreintegrator`](imu-preintegration/include/imu_preint/imu_preintegrator.hpp) |
-| reuse the part 1 ICP | `../point-to-plane-icp` referenced by source from CMake, not copied |
-| shared ICP geometry | `../icp-common` referenced the same way |
-| reuse the part 2 preintegration | `../imu-preintegration` referenced the same way |
-| ROS only as the I/O interface | ROS code lives only in [lio_node.cpp](lidar_inertial_odometer/src/lio_node.cpp); the algorithms are in `lio_core`, which has zero ROS dependency |
-| Ceres 2.1.0 / Eigen 3.4.0  | versions pinned via `find_package`; kd-tree, voxel grid and PointCloud2 parsing all hand-written |
-
-### Build and run (catkin)
-
-This package, `icp-common`, `point-to-plane-icp` and `imu-preintegration` must sit side by side under
-the catkin workspace's `src/`. The provided docker environment (`docker/run.sh`) already has that layout.
+The old ROS1 `.bag` must first be converted to rosbag2. `rosbags-convert` is installed
+in the container and does not need ROS1:
 
 ```bash
-cd /home/clobot_assignment/dev_ws
-catkin_make -DCMAKE_BUILD_TYPE=Release
-source devel/setup.bash
-
-roslaunch lidar_inertial_odometer kitti_lio.launch
+rosbags-convert --src /path/to/2011_09_30_drive_0028.bag --dst /path/to/kitti_ros2
+ros2 launch lidar_inertial_odometer kitti_lio.launch.py \
+  play:=true bag:=/path/to/kitti_ros2 rate:=0.5 rviz:=true
 ```
 
-Use `-DICP_COMMON_DIR=...`, `-DP2P_ICP_DIR=...` or `-DIMU_PREINT_DIR=...` if any of them lives
-elsewhere. The KITTI bag is ROS1 format
-and is used as is. The main launch arguments are `rate` (replay speed, default 0.5), `duration`,
-`ring_selection` and `normal_method`.
+`start:=52.0` skips the first 52 seconds. `play` defaults to false and enables
+`use_sim_time` when true. You can set `use_sim_time:=true` for external playback.
+The launch starts playback after a two-second discovery delay. For long startup
+or slow hardware, launch nodes first and run `ros2 bag play ... --clock --rate 0.5`
+separately. Humble's player does not provide the old ROS1 `duration` option.
 
-The self-check binary needs no rosbag:
+Edit [kitti.yaml](lidar_inertial_odometer/config/kitti.yaml) or pass `config:=...`.
+The YAML has the ROS 2 `lidar_inertial_odometer: ros__parameters:` structure.
+`gps:=false` disables the independent reference node. `gps_config:=...`,
+`trajectory_csv:=...` and `gt_csv:=...` select its configuration and TUM output files.
 
-```bash
-./devel/lib/lidar_inertial_odometer/test_lio_core
-```
+## Interfaces and GPS reference
 
-### Trajectory (top view, estimate vs GT)
-
-Over the full bag: 5162 frames, 4200 m travelled.
-
-![estimated vs GT (GPS) trajectory, top view](lidar_inertial_odometer/results/trajectory_top_view.png)
-
-| Image | ATE RMSE | vs distance travelled |
+| Node | Inputs | Outputs |
 |---|---|---|
-| [trajectory_top_view.png](lidar_inertial_odometer/results/trajectory_top_view.png) — direct comparison | 54.60 m | 1.30 % |
-| [trajectory_top_view_aligned.png](lidar_inertial_odometer/results/trajectory_top_view_aligned.png) — `--align` (after SE(2) Umeyama fit) | 35.22 m | 0.84 % |
+| `lidar_inertial_odometer` | `/points_raw`, `/imu_raw` | `~/odometry`, `~/path`, `~/features`, `~/submap`, `~/scan`, `~/trajectory_start`; TF `odom -> imu_link -> velodyne` |
+| `gps_ground_truth` | `/gps/fix`, `/lidar_inertial_odometer/trajectory_start` | `~/path`, GPS TUM file |
 
-With `use_imu_orientation_for_yaw: true` (the default) the world frame is aligned to ENU using the
-OXTS absolute heading, so both trajectories come out in the same frame. The raw trajectories (TUM
-format) are [lio_trajectory.txt](lidar_inertial_odometer/results/lio_trajectory.txt) and
-[lio_gt.txt](lidar_inertial_odometer/results/lio_gt.txt); the plots come from
-[plot_trajectory.py](lidar_inertial_odometer/scripts/plot_trajectory.py).
+Sensor subscriptions use best-effort volatile QoS and accept reliable publishers too.
+Path, submap and trajectory-start publishers use reliable transient-local QoS;
+the start timestamp remains available to late GT subscribers. See the
+[ROS 2 QoS documentation](https://docs.ros.org/en/humble/Concepts/Intermediate/About-Quality-of-Service-Settings.html).
+
+The LIO publishes its first valid scan timestamp and frame in a `std_msgs/msg/Header`.
+The GPS package buffers fixes until that timestamp is known, interpolates the origin
+between bracketing fixes and emits only fixes at or after the start. If recording
+begins after the LIO start, the first available GPS fix is used. Invalid/no-fix,
+nonfinite, duplicate and out-of-order fixes are rejected. Startup buffering is bounded
+by `max_buffer_fixes`; losing the required origin through overflow is an explicit error.
+
+The projection preserves the KITTI scaled Mercator convention of the previous node:
+a local ENU approximation with altitude relative to the origin. Keep
+`use_imu_orientation_for_yaw: true` with an ENU-referenced IMU orientation to overlay
+LIO and GPS directly. GPS provides a **position reference**, not precise 6-DoF ground
+truth; TUM quaternion values are identity placeholders. GPS noise and sensor lever
+arms are not corrected.
+
+To run GPS reference generation without LIO:
 
 ```bash
-python3 src/lidar_inertial_odometer/scripts/plot_trajectory.py \
-    --est /tmp/lio_trajectory.txt --gt /tmp/lio_gt.txt \
-    --out src/lidar_inertial_odometer/results/trajectory_top_view.png
+ros2 launch gps_ground_truth gps_ground_truth.launch.py origin_mode:=first_fix
 ```
 
-Every parameter and the reasoning behind its value is in
-[config/kitti.yaml](lidar_inertial_odometer/config/kitti.yaml).
+The GT package has no dependency on `lio_core` or its matching method.
+
+## Algorithms
+
+For each scan: IMU prediction -> filtering and channel selection -> deskew ->
+planar feature extraction with PCA normals -> scan-to-local-map ICP -> state and
+velocity update -> keyframe map update. The IMU prediction initializes ICP and gates
+large corrections. See [lio_odometer.cpp](lidar_inertial_odometer/src/lio_odometer.cpp).
+
+For a correspondence `(x, y)` and incremental pose `xi = [tx, ty, tz, alpha, beta, gamma]`:
+
+```text
+e = Rz(gamma) Ry(beta) Rx(alpha) x + t - y
+point residual: r = e               (3 dimensions)
+plane residual: r = n_y^T e         (1 dimension)
+```
+
+Both solvers use analytic Jacobians and Ceres, re-search correspondences each outer
+iteration and compose small increments around a centroid pivot. Normals gate
+correspondences in point-to-plane; point-to-point uses distance only.
+
+IMU preintegration computes relative rotation, velocity and position independently
+of the absolute starting state. `predict()` restores initial state and gravity,
+and `delta_at(t)` provides within-scan motion for deskewing.
+
+## Validation
+
+```bash
+colcon test --packages-select gps_ground_truth lidar_inertial_odometer
+colcon test-result --verbose
+# ROS 2 synthetic message / TF / late-subscriber / GPS integration check:
+python3 src/lidar-inertial-odometer/lidar_inertial_odometer/test/test_ros2_interface.py
+```
+
+The core suite checks synthetic motion, deskew and normal estimation. GPS tests cover
+projection, interpolation, delayed start, invalid fixes and buffer overflow. Standalone
+library suites can also be built directly:
+
+```bash
+cmake -S point-to-plane-icp -B /tmp/p2plane -DCMAKE_BUILD_TYPE=Release
+cmake --build /tmp/p2plane -j2
+ctest --test-dir /tmp/p2plane --output-on-failure
+# Substitute point-to-point-icp, imu-preintegration or common as needed.
+```
+
+Plot recorded positions with:
+
+```bash
+python3 src/lidar-inertial-odometer/lidar_inertial_odometer/scripts/plot_trajectory.py \
+  --est /tmp/lio_trajectory.txt --gt /tmp/lio_gt.txt --out /tmp/trajectory.png
+```
+
+The ROS1 trajectory numbers are not a ROS2 benchmark; evaluate a full converted bag
+before comparing matching accuracy on real data.

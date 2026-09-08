@@ -1,0 +1,8 @@
+gps_ground_truth:
+  ros__parameters:
+    gps_topic: /gps/fix
+    trajectory_start_topic: /lidar_inertial_odometer/trajectory_start
+    origin_mode: lio_start
+    odom_frame: odom
+    trajectory_csv: /tmp/lio_gt.txt
+    max_buffer_fixes: 100000
