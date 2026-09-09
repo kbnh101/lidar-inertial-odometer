@@ -1,8 +1,10 @@
 #include "p2ptpl_icp/icp_point_to_point_plane.hpp"
 
 #include <ceres/ceres.h>
+#include <ceres/context.h>
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -13,6 +15,11 @@
 
 namespace p2ptpl_icp
 {
+bool CeresCudaSolverAvailable() noexcept
+{
+    return ceres::IsDenseLinearAlgebraLibraryTypeAvailable(ceres::CUDA);
+}
+
 bool CudaEvaluationCompiled() noexcept
 {
 #ifdef P2PTPL_HAS_CUDA
@@ -125,6 +132,13 @@ void IcpPointToPointPlane::evaluate_error(const Eigen::Isometry3d& pose, const s
 
 IcpResult IcpPointToPointPlane::do_icp(const Eigen::Isometry3d& initial_guess)
 {
+    using Clock = std::chrono::steady_clock;
+    const auto mark = [&]() { return options_.collect_timing ? Clock::now() : Clock::time_point{}; };
+    const auto elapsed = [&](Clock::time_point begin)
+    {
+        return options_.collect_timing ? std::chrono::duration<double, std::milli>(Clock::now() - begin).count() : 0.0;
+    };
+    const auto registration_begin = mark();
     if (source_.empty())
     {
         throw std::runtime_error("IcpPointToPointPlane::do_icp: source cloud is empty");
@@ -137,24 +151,30 @@ IcpResult IcpPointToPointPlane::do_icp(const Eigen::Isometry3d& initial_guess)
     if (!std::isfinite(options_.point_weight) || !std::isfinite(options_.plane_weight) || options_.point_weight <= 0 || options_.plane_weight <= 0)
         throw std::invalid_argument("both hybrid residual weights must be finite and positive");
 
-    if (options_.use_cuda && !CudaEvaluationCompiled())
-        throw std::runtime_error("CUDA residual evaluation was requested, but this library was built with P2PTPL_ENABLE_CUDA=OFF");
-#ifdef P2PTPL_HAS_CUDA
-    // Reuse device and pinned buffers across outer iterations of this registration.
-    std::unique_ptr<CudaErrorEvaluation> cuda_errors;
-    if (options_.use_cuda)
-        cuda_errors = std::make_unique<CudaErrorEvaluation>(options_.point_weight, options_.plane_weight);
-#endif
+    if (options_.use_cuda && !CeresCudaSolverAvailable())
+        throw std::runtime_error("CUDA DENSE_QR was requested, but Ceres was built without CUDA support. Rebuild Ceres with USE_CUDA=ON or select CPU.");
+    if (options_.use_cuda && !ceres_context_)
+        ceres_context_.reset(ceres::Context::Create());
 
     IcpResult result;
     result.transform = initial_guess;
+    result.timing.initialization_ms = elapsed(registration_begin);
+    const auto finish = [&]()
+    {
+        result.timing.finish(elapsed(registration_begin));
+        return std::move(result);
+    };
 
     double previous_error = std::numeric_limits<double>::infinity();
 
     for (int iteration = 0; iteration < options_.max_iterations; ++iteration)
     {
+        const auto iteration_begin = mark();
+        const IcpTiming before = result.timing;
         // --- 1. search the correspondences with the current estimate -----------
+        auto phase_begin = mark();
         const std::vector<Correspondence> correspondences = find_correspondences(result.transform);
+        result.timing.correspondence_ms += elapsed(phase_begin);
         if (static_cast<int>(correspondences.size()) < 3)
         {
             // Three non-collinear pairs constrain the point term of the hybrid objective.
@@ -168,11 +188,14 @@ IcpResult IcpPointToPointPlane::do_icp(const Eigen::Isometry3d& initial_guess)
         IcpIterationLog log;
         log.iteration = iteration;
         log.correspondences = static_cast<int>(correspondences.size());
+        phase_begin = mark();
         evaluate_error(result.transform, correspondences, &log.error_before, nullptr, nullptr);
+        result.timing.diagnostic_ms += elapsed(phase_begin);
 
         // --- 2. solve for the increment xi = [t, alpha, beta, gamma] -----------
         // xi is an *increment*, not the accumulated absolute pose, and restarts from 0 each
         // iteration, so the Euler angles stay near 0 and never reach the beta = +-pi/2 gimbal lock.
+        phase_begin = mark();
         std::array<double, 6> xi{};
         xi.fill(0.0);
 
@@ -188,44 +211,39 @@ IcpResult IcpPointToPointPlane::do_icp(const Eigen::Isometry3d& initial_guess)
             }
             pivot /= static_cast<double>(correspondences.size());
         }
+        result.timing.pivot_ms += elapsed(phase_begin);
 
-        // callback outlives Problem; it refreshes e and de/dxi once per evaluation.
-        SharedErrorEvaluation shared_errors(xi.data());
+        phase_begin = mark();
+        // Always evaluate residuals/Jacobians on CPU; use_cuda selects only Ceres QR.
+        // The callback outlives Problem and refreshes e and de/dxi once per evaluation.
+        SharedErrorEvaluation shared_errors(xi.data(), options_.collect_timing ? &result.timing : nullptr);
         ceres::Problem::Options problem_options;
+        // Retain Ceres' CUDA handles across outer iterations and subsequent scans.
+        problem_options.context = options_.use_cuda ? ceres_context_.get() : nullptr;
         problem_options.evaluation_callback = &shared_errors;
-#ifdef P2PTPL_HAS_CUDA
-        if (cuda_errors)
-        {
-            cuda_errors->Reset(xi.data());
-            problem_options.evaluation_callback = cuda_errors.get();
-        }
-#endif
-        ceres::Problem problem(problem_options);
-        problem.AddParameterBlock(xi.data(), 6);
+        auto problem = std::make_unique<ceres::Problem>(problem_options);
+        problem->AddParameterBlock(xi.data(), 6);
         ceres::LossFunction* loss = options_.huber_delta > 0.0 ? new ceres::HuberLoss(options_.huber_delta) : nullptr;
+        result.timing.problem_setup_ms += elapsed(phase_begin);
 
+        // One shared error plus two residual blocks per correspondence; this allocation loop grows
+        // linearly with the correspondence count and is reported separately from the solve itself.
+        phase_begin = mark();
         for (const Correspondence& correspondence : correspondences)
         {
             // Pre-transform by the current pose. The cost function then sees x in a partially
             // aligned frame, which is what makes xi = 0 mean "the current state".
             const Eigen::Vector3d source_point = result.transform * source_[correspondence.source_index].point - pivot;
             const Eigen::Vector3d target_point = target_[correspondence.target_index].point - pivot;
-#ifdef P2PTPL_HAS_CUDA
-            if (cuda_errors)
-            {
-                const auto index = cuda_errors->Add(source_point, target_point, target_[correspondence.target_index].normal);
-                AddCudaCorrespondenceResiduals(problem, *cuda_errors, index, xi.data(), loss);
-            }
-            else
-#endif
-            {
-                const auto error = shared_errors.Add(source_point, target_point, target_[correspondence.target_index].normal);
-                AddCorrespondenceResiduals(problem, error, xi.data(), loss, options_.point_weight, options_.plane_weight);
-            }
+            const auto error = shared_errors.Add(source_point, target_point, target_[correspondence.target_index].normal);
+            AddCorrespondenceResiduals(*problem, error, xi.data(), loss, options_.point_weight, options_.plane_weight);
         }
+        result.timing.residual_block_ms += elapsed(phase_begin);
 
+        phase_begin = mark();
         ceres::Solver::Options solver_options;
         solver_options.linear_solver_type = ceres::DENSE_QR;
+        solver_options.dense_linear_algebra_library_type = options_.use_cuda ? ceres::CUDA : ceres::EIGEN;
         solver_options.trust_region_strategy_type = ceres::LEVENBERG_MARQUARDT;
         solver_options.max_num_iterations = options_.max_solver_iterations;
         solver_options.minimizer_progress_to_stdout = false;
@@ -235,21 +253,41 @@ IcpResult IcpPointToPointPlane::do_icp(const Eigen::Isometry3d& initial_guess)
         solver_options.parameter_tolerance = 1e-16;
 
         ceres::Solver::Summary summary;
-        ceres::Solve(solver_options, &problem, &summary);
-#ifdef P2PTPL_HAS_CUDA
-        if (cuda_errors && !cuda_errors->last_error().empty())
-            throw std::runtime_error(cuda_errors->last_error());
-#endif
+        result.timing.problem_setup_ms += elapsed(phase_begin);
+
+        phase_begin = mark();
+        ceres::Solve(solver_options, problem.get(), &summary);
+        result.timing.ceres_solve_ms += elapsed(phase_begin);
+        if (options_.collect_timing)
+        {
+            auto ms = [](double seconds) { return 1000.0 * std::max(0.0, seconds); };
+            result.timing.ceres_preprocessor_ms += ms(summary.preprocessor_time_in_seconds);
+            result.timing.ceres_minimizer_ms += ms(summary.minimizer_time_in_seconds);
+            result.timing.ceres_postprocessor_ms += ms(summary.postprocessor_time_in_seconds);
+            result.timing.ceres_residual_eval_ms += ms(summary.residual_evaluation_time_in_seconds);
+            result.timing.ceres_jacobian_eval_ms += ms(summary.jacobian_evaluation_time_in_seconds);
+            result.timing.ceres_linear_solver_ms += ms(summary.linear_solver_time_in_seconds);
+            result.timing.residual_evaluations += std::max(0, summary.num_residual_evaluations);
+            result.timing.jacobian_evaluations += std::max(0, summary.num_jacobian_evaluations);
+            result.timing.linear_solves += std::max(0, summary.num_linear_solves);
+        }
+        phase_begin = mark();
+        problem.reset();  // Includes cost/loss destruction; the shared cache still outlives Problem.
+        result.timing.problem_cleanup_ms += elapsed(phase_begin);
+        log.used_cuda_solver = summary.dense_linear_algebra_library_type == ceres::CUDA;
+        if (options_.use_cuda && !log.used_cuda_solver)
+            throw std::runtime_error("Ceres did not select the requested CUDA dense linear algebra backend");
         if (!summary.IsSolutionUsable())
         {
             result.converged = false;
             result.final_error = result.final_mean_abs_error = result.final_max_abs_error = std::numeric_limits<double>::infinity();
-            return result;
+            return finish();
         }
 
         // --- 3. compose the increment onto the accumulated pose ----------------
         // The increment acts as p -> R(p - pivot) + pivot + t, so the world frame translation is
         // (pivot - R*pivot + t).
+        phase_begin = mark();
         Eigen::Isometry3d increment = Eigen::Isometry3d::Identity();
         increment.linear() = common::euler_zyx_to_rotation(xi[3], xi[4], xi[5]);
         increment.translation() = pivot - increment.linear() * pivot + Eigen::Vector3d(xi[0], xi[1], xi[2]);
@@ -257,7 +295,12 @@ IcpResult IcpPointToPointPlane::do_icp(const Eigen::Isometry3d& initial_guess)
 
         log.delta_translation = increment.translation().norm();
         log.delta_rotation = Eigen::AngleAxisd(increment.linear()).angle();
+        result.timing.pose_update_ms += elapsed(phase_begin);
+        phase_begin = mark();
         evaluate_error(result.transform, correspondences, &log.error_after, nullptr, nullptr);
+        result.timing.diagnostic_ms += elapsed(phase_begin);
+        log.timing = TimingDifference(result.timing, before);
+        log.timing.finish(elapsed(iteration_begin));
         result.history.push_back(log);
         result.iterations = iteration + 1;
         result.correspondences = log.correspondences;
@@ -282,7 +325,9 @@ IcpResult IcpPointToPointPlane::do_icp(const Eigen::Isometry3d& initial_guess)
     }
 
     // --- 5. re-pair the correspondences and report the final error --------------
+    auto phase_begin = mark();
     const std::vector<Correspondence> final_correspondences = find_correspondences(result.transform);
+    result.timing.correspondence_ms += elapsed(phase_begin);
     result.correspondences = static_cast<int>(final_correspondences.size());
     if (final_correspondences.empty())
     {
@@ -292,10 +337,12 @@ IcpResult IcpPointToPointPlane::do_icp(const Eigen::Isometry3d& initial_guess)
         result.final_mean_abs_error = infinity;
         result.final_max_abs_error = infinity;
         result.converged = false;
-        return result;
+        return finish();
     }
+    phase_begin = mark();
     evaluate_error(result.transform, final_correspondences, &result.final_error, &result.final_mean_abs_error, &result.final_max_abs_error);
-    return result;
+    result.timing.diagnostic_ms += elapsed(phase_begin);
+    return finish();
 }
 
 IcpResult IcpPointToPointPlane::do_icp(const common::PointCloud& source, const common::PointCloud& target)

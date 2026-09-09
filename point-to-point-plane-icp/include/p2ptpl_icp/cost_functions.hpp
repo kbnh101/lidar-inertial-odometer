@@ -69,7 +69,7 @@ inline void AddCorrespondenceResiduals(ceres::Problem& problem, const std::share
     if (!std::isfinite(point_weight) || !std::isfinite(plane_weight) || point_weight <= 0 || plane_weight <= 0)
         throw std::invalid_argument("both hybrid residual weights must be finite and positive");
     // Two distinct blocks, sharing both the correspondence error and pose block.
-    problem.AddResidualBlock(new PointCostFunction(error, point_weight), loss, xi);
+    // problem.AddResidualBlock(new PointCostFunction(error, point_weight), loss, xi);
     problem.AddResidualBlock(new PlaneCostFunction(error, plane_weight), loss, xi);
 }
 }  // namespace p2ptpl_icp

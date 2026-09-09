@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -29,6 +30,8 @@ struct Arguments
     std::filesystem::path data_dir = P2PTPL_ICP_DATA_DIR;
     int repeat = 10;
     int warmup = 1;
+    std::string csv;
+    bool iterations = false;
     p2ptpl_icp::IcpOptions icp;
     Eigen::Isometry3d initial_pose = Eigen::Isometry3d::Identity();
     Eigen::Isometry3d expected_pose = Eigen::Isometry3d::Identity();
@@ -41,7 +44,9 @@ void Usage(const char* program)
               << "  --data-dir DIR          source_point.txt / target_point.txt (default: bundled data)\n"
               << "  --repeat N              measured independent registrations (default: 10)\n"
               << "  --warmup N              unmeasured registrations (default: 1)\n"
-              << "  --backend cpu|cuda      residual/Jacobian backend (default: cuda in CUDA builds)\n"
+              << "  --csv FILE              per-registration module timings and counts\n"
+              << "  --iterations            add the per-outer-iteration module table of the last run\n"
+              << "  --backend cpu|cuda      Ceres DENSE_QR only; residual/Jacobian: CPU (default: cuda when Ceres supports it)\n"
               << "  --point-weight W        positive point cost weight (default: 1)\n"
               << "  --plane-weight W        positive plane cost weight (default: 1)\n"
               << "  --max-distance M        correspondence distance threshold (default: 1 m)\n"
@@ -77,6 +82,7 @@ int Count(const std::string& text, int minimum)
 Arguments ParseArguments(int argc, char** argv)
 {
     Arguments args;
+    args.icp.collect_timing = true;
     // Installed ROS 2 executables live in <prefix>/lib/<package>/. Prefer their
     // bundled data, so moving the install tree does not require the source checkout.
     std::error_code error;
@@ -100,7 +106,15 @@ Arguments ParseArguments(int argc, char** argv)
             }
             return argv[i];
         };
-        if (option == "--data-dir")
+        if (option == "--csv")
+        {
+            args.csv = next();
+        }
+        else if (option == "--iterations")
+        {
+            args.iterations = true;
+        }
+        else if (option == "--data-dir")
         {
             args.data_dir = next();
         }
@@ -233,6 +247,7 @@ int main(int argc, char** argv)
         const Arguments args = ParseArguments(argc, argv);
         const auto load_begin = Clock::now();
         const auto source = common::load_point_cloud((args.data_dir / "source_point.txt").string());
+        const auto source_load_end = Clock::now();
         const auto target = common::load_point_cloud((args.data_dir / "target_point.txt").string());
         const double load_ms = Milliseconds(load_begin, Clock::now());
         if (source.empty() || target.empty())
@@ -242,7 +257,8 @@ int main(int argc, char** argv)
         std::cout << "Hybrid ICP: " << source.size() << " source / " << target.size() << " target points\n"
                   << "data directory: " << std::filesystem::absolute(args.data_dir) << '\n'
                   << "build: " << P2PTPL_BUILD_TYPE << " (use Release for timing)\n"
-                  << "residual/Jacobian backend: " << (args.icp.use_cuda ? "cuda" : "cpu") << "; Ceres DENSE_QR: CPU\n"
+                  << "residual/Jacobian backend: cpu; Ceres DENSE_QR: "
+                  << (args.icp.use_cuda ? "CUDA" : "CPU (Eigen)") << '\n'
                   << "weights: point=" << args.icp.point_weight << ", plane=" << args.icp.plane_weight << '\n'
                   << "max distance: " << args.icp.max_correspondence_distance << " m; max iterations: " << args.icp.max_iterations << '\n'
                   << "initial source -> target pose:\n" << args.initial_pose.matrix() << '\n'
@@ -260,7 +276,17 @@ int main(int argc, char** argv)
             warmup();
         }
 
-        std::vector<double> setup_times, icp_times, total_times;
+        std::vector<double> source_setup_times, target_setup_times, setup_times, icp_times, total_times;
+        std::vector<p2ptpl_icp::IcpTiming> module_times;
+        std::ofstream csv;
+        if (!args.csv.empty())
+        {
+            csv.exceptions(std::ios::failbit | std::ios::badbit);
+            csv.open(args.csv);
+            csv << "run,backend,converged,iterations,correspondences,source_setup_ms,target_setup_ms,registration_ms";
+            p2ptpl_icp::WriteTimingCsvHeader(csv);
+            csv << '\n' << std::fixed << std::setprecision(9);
+        }
         setup_times.reserve(args.repeat);
         icp_times.reserve(args.repeat);
         total_times.reserve(args.repeat);
@@ -276,6 +302,7 @@ int main(int argc, char** argv)
             const auto begin = Clock::now();
             p2ptpl_icp::IcpPointToPointPlane icp(args.icp);
             icp.set_source(source);
+            const auto source_setup_end = Clock::now();
             icp.set_target(target);
             const auto setup_end = Clock::now();
             auto current = icp.do_icp(args.initial_pose);
@@ -283,6 +310,16 @@ int main(int argc, char** argv)
             setup_times.push_back(Milliseconds(begin, setup_end));
             icp_times.push_back(Milliseconds(setup_end, end));
             total_times.push_back(Milliseconds(begin, end));
+            source_setup_times.push_back(Milliseconds(begin, source_setup_end));
+            target_setup_times.push_back(Milliseconds(source_setup_end, setup_end));
+            module_times.push_back(current.timing);
+            if (csv.is_open())
+            {
+                csv << i + 1 << ',' << (args.icp.use_cuda ? "cuda" : "cpu") << ',' << current.converged << ',' << current.iterations << ','
+                    << current.correspondences << ',' << source_setup_times.back() << ',' << target_setup_times.back() << ',' << total_times.back();
+                p2ptpl_icp::WriteTimingCsvValues(csv, current.timing);
+                csv << '\n';
+            }
             converged += current.converged && current.iterations > 0 && std::isfinite(current.final_error) && current.transform.matrix().allFinite();
             min_iterations = std::min(min_iterations, current.iterations);
             max_iterations = std::max(max_iterations, current.iterations);
@@ -290,12 +327,27 @@ int main(int argc, char** argv)
             result = std::move(current);
         }
 
-        std::cout << "\nTiming (steady_clock wall time; warmup excluded)\n"
-                  << std::fixed << std::setprecision(6) << "TXT load, once        : " << load_ms << " ms\n";
-        PrintTiming("Setup + target kd-tree", setup_times);
-        PrintTiming("ICP search + Ceres", icp_times);
-        PrintTiming("Registration total", total_times);
-        std::cout << "Total excludes file I/O, reporting, final diagnostics and matcher destruction.\n"
+        // Level 1: host stages around do_icp(). Level 2: the modules inside do_icp().
+        // Level 3 (--iterations): the same modules for every outer iteration of the last run.
+        std::cout << "\nHost pipeline (steady_clock wall time; warmup excluded)\n"
+                  << std::fixed << std::setprecision(6) << "Source TXT load (once): " << Milliseconds(load_begin, source_load_end) << " ms\n"
+                  << "Target TXT load (once): " << load_ms - Milliseconds(load_begin, source_load_end) << " ms\n";
+        PrintTiming("Source copy/normalize", source_setup_times);
+        PrintTiming("Target + kd-tree build", target_setup_times);
+        PrintTiming("Setup subtotal", setup_times);
+        PrintTiming("do_icp()", icp_times);
+        PrintTiming("Setup + do_icp()", total_times);
+        p2ptpl_icp::PrintIcpTiming(std::cout, module_times, "Inside do_icp(): module timing");
+        if (args.iterations)
+        {
+            p2ptpl_icp::PrintIterationTiming(std::cout, result.history, "Last measured registration: per-iteration module timing");
+        }
+        if (csv.is_open())
+        {
+            csv.close();
+            std::cout << "Module timing CSV: " << args.csv << '\n';
+        }
+        std::cout << "\nHost stages exclude file I/O, reporting, final diagnostics and matcher destruction.\n"
                   << "\nConverged runs       : " << converged << '/' << args.repeat << '\n'
                   << "Outer iterations     : " << min_iterations << " .. " << max_iterations << '\n'
                   << std::scientific << "Worst hybrid RMS [m] : " << worst_error << '\n'

@@ -84,6 +84,7 @@ struct Arguments
 Arguments MakeDefaults()
 {
     Arguments args;
+    args.icp.collect_timing = true;
 
     args.features.ring_selection = RingSelection::kStride;
     args.features.num_channels = 128;
@@ -140,7 +141,7 @@ void Usage(const char* program)
               << "  --min-normal-dot D      normal agreement threshold, -1 disables (default: 0.5)\n"
               << "  --huber D               Huber delta, 0 disables (default: 0.2)\n"
               << "  --point-weight W / --plane-weight W (default: 1 / 1)\n"
-              << "  --backend cpu|cuda (default: cuda in CUDA builds; Ceres DENSE_QR stays on CPU)\n"
+              << "  --backend cpu|cuda (Ceres DENSE_QR only; residual/Jacobian: CPU; default: cuda when Ceres supports it)\n"
               << "  --help\n"
               << "Exit codes: 0 every frame converged, 1 input/error, 2 at least one frame did not.\n";
 }
@@ -603,6 +604,9 @@ void EvaluateResiduals(const common::PointCloud& source, const common::PointClou
 /// One registered scan pair.
 struct FrameRecord
 {
+    p2ptpl_icp::IcpTiming icp_timing;  ///< module breakdown of do_icp() for this pair
+    std::vector<p2ptpl_icp::IcpIterationLog> icp_iterations;  ///< per-outer-iteration timing of the same call
+    double gyro_ms = 0, preprocess_ms = 0, deskew_ms = 0, extraction_ms = 0;
     double timestamp = 0.0;
     double dt = 0.0;
     int source_features = 0;
@@ -658,7 +662,9 @@ void WriteCsv(const std::string& path, const std::vector<FrameRecord>& records)
         throw std::runtime_error("cannot write '" + path + "'");
     }
     file << "frame,timestamp,dt,source_features,target_features,correspondences,iterations,converged,rms,point_rms,plane_rms,max_abs,dx,dy,dz,"
-         << "translation,speed,rotation_deg,gyro_deg,imu_icp_deg,convert_ms,feature_ms,setup_ms,icp_ms,total_ms\n";
+         << "translation,speed,rotation_deg,gyro_deg,imu_icp_deg,convert_ms,feature_ms,setup_ms,icp_ms,total_ms";
+    p2ptpl_icp::WriteTimingCsvHeader(file, "icp_");  // module breakdown of the icp_ms column
+    file << '\n';
     file << std::fixed << std::setprecision(9);
     for (std::size_t i = 0; i < records.size(); ++i)
     {
@@ -670,7 +676,9 @@ void WriteCsv(const std::string& path, const std::vector<FrameRecord>& records)
              << record.plane_rms << ',' << record.max_abs << ',' << translation.x() << ',' << translation.y() << ',' << translation.z() << ','
              << translation.norm() << ',' << (record.dt > 0.0 ? translation.norm() / record.dt : 0.0) << ',' << angle * kRadToDeg << ','
              << record.gyro_angle * kRadToDeg << ',' << record.imu_icp_angle * kRadToDeg << ',' << record.convert_ms << ',' << record.feature_ms << ','
-             << record.setup_ms << ',' << record.icp_ms << ',' << record.total_ms << '\n';
+             << record.setup_ms << ',' << record.icp_ms << ',' << record.total_ms;
+        p2ptpl_icp::WriteTimingCsvValues(file, record.icp_timing);
+        file << '\n';
     }
 }
 
@@ -750,7 +758,8 @@ int main(int argc, char** argv)
                   << "initial guess : " << (args.use_imu_rotation ? "gyro rotation" : "identity rotation") << " + "
                   << (args.constant_velocity ? "constant velocity" : "zero translation") << (args.deskew ? ", deskew on" : ", deskew off") << '\n'
                   << "build         : " << LIO_BUILD_TYPE << " (use Release for timing)\n"
-                  << "backend       : " << (args.icp.use_cuda ? "cuda" : "cpu") << "; Ceres DENSE_QR: CPU\n"
+                  << "backend       : residual/Jacobian: cpu; Ceres DENSE_QR: "
+                  << (args.icp.use_cuda ? "CUDA" : "CPU (Eigen)") << '\n'
                   << std::flush;
 
         rclcpp::Serialization<sensor_msgs::msg::PointCloud2> cloud_serialization;
@@ -926,6 +935,8 @@ int main(int argc, char** argv)
             record.feature_ms = Milliseconds(convert_end, feature_end);
             record.setup_ms = Milliseconds(feature_end, setup_end);
             record.icp_ms = Milliseconds(setup_end, icp_end);
+            record.icp_timing = result.timing;  // module breakdown inside do_icp(), enabled by collect_timing
+            record.icp_iterations = result.history;
             record.total_ms = Milliseconds(frame_begin, icp_end);
             records.push_back(record);
 
@@ -965,9 +976,11 @@ int main(int argc, char** argv)
 
         std::vector<double> convert, feature, setup, icp_times, total, matching;
         std::vector<double> rms, point_rms_values, plane_rms_values, correspondences, ratio, speeds, imu_angles, gyro_angles;
+        std::vector<p2ptpl_icp::IcpTiming> icp_modules;
         int converged = 0;
         for (const FrameRecord& record : records)
         {
+            icp_modules.push_back(record.icp_timing);
             convert.push_back(record.convert_ms);
             feature.push_back(record.feature_ms);
             setup.push_back(record.setup_ms);
@@ -993,6 +1006,12 @@ int main(int argc, char** argv)
         PrintTiming("Matching (setup+icp)", matching);
         PrintTiming("Per scan, end to end", total);
         std::cout << "Bag reading, deserialization and printing are outside these numbers.\n";
+        // Second level: where the "ICP search + Ceres" row above went, module by module.
+        p2ptpl_icp::PrintIcpTiming(std::cout, icp_modules, "Inside do_icp(): module timing");
+        if (!records.empty())
+        {
+            p2ptpl_icp::PrintIterationTiming(std::cout, records.back().icp_iterations, "Last scan pair: per-outer-iteration module timing");
+        }
 
         const double mean_total = Mean(total);
         std::cout << std::fixed << std::setprecision(3) << "Scan period          : " << args.features.scan_period * 1e3 << " ms -> real-time factor "

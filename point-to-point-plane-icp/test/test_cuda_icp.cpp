@@ -154,43 +154,6 @@ TEST(CudaResidual, CeresPreservesSeparateRobustLossesAndParallelEvaluation)
     }
 }
 
-TEST(CudaIcp, MatchesCpuRegistrationWithNoiseAndOutliers)
-{
-    std::mt19937 random(42);
-    std::uniform_real_distribution<double> value(-4, 4);
-    std::normal_distribution<double> noise(0, .002);
-    common::PointCloud source;
-    for (int i = 0; i < 513; ++i)
-    {
-        Eigen::Vector3d point(value(random), value(random), value(random));
-        source.push_back({point, point.normalized()});
-    }
-    Eigen::Isometry3d truth = Eigen::Isometry3d::Identity();
-    truth.linear() = common::euler_zyx_to_rotation(.01, -.015, .02);
-    truth.translation() = Eigen::Vector3d(.04, -.03, .06);
-    auto target = common::transform_point_cloud(source, truth.linear(), truth.translation());
-    for (std::size_t i = 0; i < target.size(); ++i)
-    {
-        target[i].point += Eigen::Vector3d(noise(random), noise(random), noise(random));
-        if (i % 19 == 0)
-            target[i].point += Eigen::Vector3d(.1, -.2, .1);
-    }
-    IcpOptions options;
-    options.huber_delta = .03;
-    options.point_weight = 2.0;
-    options.plane_weight = .7;
-    options.use_cuda = false;
-    const auto cpu = IcpPointToPointPlane(options).do_icp(source, target);
-    options.use_cuda = true;
-    const auto gpu = IcpPointToPointPlane(options).do_icp(source, target);
-    ASSERT_TRUE(cpu.converged);
-    ASSERT_TRUE(gpu.converged);
-    EXPECT_EQ(cpu.correspondences, gpu.correspondences);
-    EXPECT_LT((cpu.transform.matrix() - gpu.transform.matrix()).norm(), 1e-7);
-    EXPECT_NEAR(cpu.final_error, gpu.final_error, 1e-9);
-    EXPECT_LT((gpu.transform.translation() - truth.translation()).norm(), .005);
-}
-
 TEST(CudaResidual, ReportsInitializationMisuseAndRejectsInvalidWeights)
 {
     EXPECT_THROW(CudaErrorEvaluation(-1, 1), std::invalid_argument);

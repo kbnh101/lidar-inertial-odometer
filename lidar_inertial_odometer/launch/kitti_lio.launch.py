@@ -1,4 +1,4 @@
-"""ROS 2 LIO + independent GPS GT. Pass a converted rosbag2 directory to bag."""
+"""ROS 2 LIO + independent GPS GT. Use play:=true for the default KITTI bag."""
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -23,7 +23,8 @@ def playback(context):
 def generate_launch_description():
     share = get_package_share_directory('lidar_inertial_odometer')
     gps_share = get_package_share_directory('gps_ground_truth')
-    args = {'bag': '', 'play': 'false', 'rate': '0.5', 'start': '0.0', 'rviz': 'true',
+    args = {'bag': '/home/chanho/data/kitti/lidar',
+            'play': 'false', 'rate': '0.5', 'start': '0.0', 'rviz': 'true',
             'gps': 'true', 'use_sim_time': LaunchConfiguration('play'),
             'config': os.path.join(share, 'config', 'kitti.yaml'),
             'gps_config': os.path.join(gps_share, 'config', 'gps.yaml'),
@@ -31,9 +32,14 @@ def generate_launch_description():
     sim_time = ParameterValue(LaunchConfiguration('use_sim_time'), value_type=bool)
     return LaunchDescription([
         *[DeclareLaunchArgument(name, default_value=value) for name, value in args.items()],
-        Node(package='lidar_inertial_odometer', executable='lio_node', name='lidar_inertial_odometer',
-             output='screen', parameters=[LaunchConfiguration('config'), {
-                 'use_sim_time': sim_time, 'trajectory_csv': LaunchConfiguration('trajectory_csv')}]),
+        Node(
+            package='lidar_inertial_odometer', 
+            executable='lio_node', 
+            name='lidar_inertial_odometer',
+            output='screen', 
+            parameters=[LaunchConfiguration('config'), {
+                 'use_sim_time': sim_time, 
+                 'trajectory_csv': LaunchConfiguration('trajectory_csv')}]),
         Node(package='gps_ground_truth', executable='gps_ground_truth_node', name='gps_ground_truth',
              condition=IfCondition(LaunchConfiguration('gps')), output='screen',
              parameters=[LaunchConfiguration('gps_config'), {

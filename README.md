@@ -6,6 +6,7 @@ launch, rosbag2 playback and RViz2. GPS reference generation is an independent p
 
 ```text
 common/                    shared geometry, point cloud, kd-trees, Euler derivatives
+cuda-residual-tutorial/     CPU correspondences + CUDA residual-only tutorial
 imu-preintegration/        ROS-free IMU preintegration
 point-to-plane-icp/         ROS-free point-to-plane Ceres ICP
 point-to-point-icp/         ROS-free point-to-point Ceres ICP
@@ -17,13 +18,18 @@ docker/                    Humble development container
 
 This is the **gpu-residual-jacobian** branch, based on **point-to-point-plane-icp**.
 LIO links the new [`point_to_point_plane_icp` package](point-to-point-plane-icp/README.md).
-CUDA builds evaluate the weighted point/plane residuals and analytic Jacobians in
-double precision on the GPU, in one batch per Ceres evaluation. CPU evaluation is
-also available through `icp_use_cuda: false` or the demos' `--backend cpu` option.
+Weighted point/plane residuals and analytic Jacobians are evaluated in double
+precision on the CPU. Ceres CUDA `DENSE_QR` handles the pose's linear solve when
+the linked Ceres supports CUDA (the default on this machine). `icp_use_cuda: false`
+or the demos' `--backend cpu` option selects Eigen CPU `DENSE_QR` instead.
 Each correspondence uses `e = R x + t - y` and adds two distinct residual blocks
 on the same pose: `sqrt(w_point) * e` and `sqrt(w_plane) * n^T e`.
 Both weights default to 1 and are exposed as `icp_point_weight` / `icp_plane_weight`.
 The GPS package stays independent of this matching method.
+
+For a minimal example that loads the sample clouds, finds pairs with `common::KdTree3d`
+and computes only point/plane residuals on CUDA, see the
+[CUDA residual tutorial](cuda-residual-tutorial/README.md) (no Ceres or Jacobians).
 
 ## Build and run
 
@@ -34,21 +40,23 @@ containing the checkout under `src/`:
 source /opt/ros/humble/setup.bash
 colcon build --packages-select point_to_point_plane_icp gps_ground_truth lidar_inertial_odometer \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
-  -DP2PTPL_ENABLE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=89
+  -DP2PTPL_ENABLE_CUDA=OFF
 source install/setup.bash
 ros2 launch lidar_inertial_odometer kitti_lio.launch.py play:=false
 ```
 
-The GPU build requires CMake >= 3.18, a CUDA toolkit and an NVIDIA GPU. Architecture
-`89` above is for this machine's RTX 4060; adjust it for another GPU. The GPU path is
-enabled by default and reports CUDA failures without silently switching to CPU.
-Use `-DP2PTPL_ENABLE_CUDA=OFF` to build without the toolkit.
+GPU QR requires CMake >= 3.18, CUDA-enabled Ceres, its CUDA runtime libraries and
+an NVIDIA GPU. `P2PTPL_ENABLE_CUDA=OFF` disables compiling the legacy custom residual
+kernel, which ICP no longer uses. It does not disable Ceres GPU QR. The solver
+defaults to CUDA when Ceres supports it and reports failures without CPU fallback.
 
 Ceres 2.1 is required; Ubuntu 22.04's default Ceres 2.0 package is too old.
-The existing `/usr/local` Ceres 2.1 works unchanged. The evaluation callback runs our
-CUDA kernel; Ceres still uses CPU `DENSE_QR` for the six-parameter pose solve. A CUDA
-build of Ceres is not required for this residual/Jacobian path. Correspondence search,
-feature extraction, IMU processing and final error diagnostics remain on the CPU.
+The existing `/usr/local` Ceres 2.1 was built with CUDA support and works unchanged.
+The evaluation callback computes residuals and Jacobians on CPU; Ceres uses CUDA
+`DENSE_QR` for the six-parameter linear solve. GPU mode requires Ceres built with `USE_CUDA=ON` and fails
+explicitly if that backend is unavailable. Ceres' context is reused across solves.
+Correspondence search, feature extraction, IMU processing, robust loss processing
+and final error diagnostics remain on the CPU.
 See the [GPU build and validation notes](point-to-point-plane-icp/README.md#cuda-backend).
 
 The Dockerfile builds Ceres 2.1 from source and installs Eigen 3.4 from apt.
@@ -76,6 +84,17 @@ rosbags-convert --src /path/to/2011_09_30_drive_0028.bag --dst /path/to/kitti_ro
 ros2 launch lidar_inertial_odometer kitti_lio.launch.py \
   play:=true bag:=/path/to/kitti_ros2 rate:=0.5 rviz:=true
 ```
+
+The launch defaults to the converted KITTI bag at `/home/chanho/data/kitti/lidar`.
+Its `/points_raw`, `/imu_raw`, and `/gps/fix` topics match the supplied configs.
+On this machine, start playback and LIO with:
+
+```bash
+ros2 launch lidar_inertial_odometer kitti_lio.launch.py play:=true
+```
+
+Use `bag:=/another/rosbag2_directory` to override the path, or `rviz:=false` for
+headless execution. The default `play:=false` still starts nodes without playback.
 
 `start:=52.0` skips the first 52 seconds. `play` defaults to false and enables
 `use_sim_time` when true. You can set `use_sim_time:=true` for external playback.

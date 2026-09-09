@@ -2,6 +2,7 @@
 #include <ceres/ceres.h>
 #include <array>
 #include <random>
+#include "icp_timing_report.hpp"
 #include "p2ptpl_icp/cost_functions.hpp"
 #include "p2ptpl_icp/icp_point_to_point_plane.hpp"
 
@@ -95,7 +96,7 @@ TEST(HybridIcp, RecoversKnownTransformFromIdentityWithRobustLoss)
     truth.linear() = common::euler_zyx_to_rotation(.01, -.015, .02);
     truth.translation() = Eigen::Vector3d(.04, -.03, .06);
     auto target = common::transform_point_cloud(source, truth.linear(), truth.translation());
-    IcpOptions options;
+    IcpOptions options = icp_test::TimedOptions();
     options.huber_delta = .2;
     IcpPointToPointPlane icp(options);
     const auto result = icp.do_icp(source, target);
@@ -103,6 +104,7 @@ TEST(HybridIcp, RecoversKnownTransformFromIdentityWithRobustLoss)
     EXPECT_EQ(result.correspondences, static_cast<int>(source.size()));
     EXPECT_LT((result.transform.matrix() - truth.matrix()).norm(), 1e-8);
     EXPECT_LT(result.final_error, 1e-8);
+    icp_test::ReportTiming("150 random points, Huber loss", result);
 }
 
 TEST(HybridIcp, PointTermConstrainsTangentialMotionOnOnePlane)
@@ -114,10 +116,11 @@ TEST(HybridIcp, PointTermConstrainsTangentialMotionOnOnePlane)
     auto target = source;
     for (auto& point : target)
         point.point += Eigen::Vector3d(.1, -.1, .03);
-    IcpPointToPointPlane icp;
+    IcpPointToPointPlane icp(icp_test::TimedOptions());
     const auto result = icp.do_icp(source, target);
     EXPECT_TRUE(result.converged);
     EXPECT_LT((result.transform.translation() - Eigen::Vector3d(.1, -.1, .03)).norm(), 1e-8);
+    icp_test::ReportTiming("56 points on one plane", result);
 }
 
 TEST(HybridIcp, InvalidNormalsAndNoCorrespondencesAreFailures)
@@ -150,13 +153,13 @@ TEST(HybridIcp, RejectsInvalidWeightsAndEmptyClouds)
     EXPECT_THROW(icp.do_icp(MakeCloud(), MakeCloud()), std::invalid_argument);
 }
 
-#ifndef P2PTPL_HAS_CUDA
-TEST(HybridIcp, CpuBuildRejectsExplicitCudaRequest)
+TEST(HybridIcp, CeresBuildControlsDefaultSolverAndRejectsUnavailableCuda)
 {
-    EXPECT_FALSE(CudaEvaluationCompiled());
     IcpPointToPointPlane icp;
+    EXPECT_EQ(icp.options().use_cuda, CeresCudaSolverAvailable());
+    if (CeresCudaSolverAvailable())
+        return;  // Actual CUDA solves are covered by test_ceres_cuda_icp, even without custom kernels.
     EXPECT_FALSE(icp.options().use_cuda);
     icp.mutable_options().use_cuda = true;
     EXPECT_THROW(icp.do_icp(MakeCloud(), MakeCloud()), std::runtime_error);
 }
-#endif

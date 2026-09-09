@@ -1,14 +1,26 @@
 #pragma once
 
 #include <Eigen/Geometry>
+#include <iomanip>
+#include <memory>
+#include <ostream>
 #include <vector>
 
 #include "common/kdtree.hpp"
 #include "common/point_cloud.hpp"
 #include "p2ptpl_icp/cuda_error.hpp"
+#include "p2ptpl_icp/timing.hpp"
+
+namespace ceres
+{
+class Context;
+}
 
 namespace p2ptpl_icp
 {
+// Reports linked Ceres build support, not whether a GPU is present at runtime.
+bool CeresCudaSolverAvailable() noexcept;
+
 /// ICP runtime parameters.
 struct IcpOptions
 {
@@ -38,9 +50,10 @@ struct IcpOptions
     double point_weight = 1.0;  ///< positive coefficient of ||e||^2
     double plane_weight = 1.0;  ///< positive coefficient of (n^T e)^2
 
-    bool use_cuda = CudaEvaluationCompiled();  ///< CUDA builds default to GPU evaluation; false selects CPU
+    bool use_cuda = CeresCudaSolverAvailable();  ///< Ceres CUDA DENSE_QR only; residuals/Jacobians always use CPU. False selects Eigen QR.
 
     bool verbose = false;  ///< prints the per-iteration progress to stdout
+    bool collect_timing = false;  ///< Module profiling; demos enable this, ordinary LIO stays uninstrumented
 };
 
 /// Per-iteration diagnostics.
@@ -52,11 +65,14 @@ struct IcpIterationLog
     double error_after = 0.0;  ///< RMS error after the update [m]
     double delta_translation = 0.0;  ///< |dt| of this iteration [m]
     double delta_rotation = 0.0;  ///< |dR| of this iteration [rad]
+    bool used_cuda_solver = false;  ///< Actual dense backend reported by Ceres for this iteration
+    IcpTiming timing;
 };
 
 /// Final ICP result -- the source to target relative pose plus diagnostics.
 struct IcpResult
 {
+    IcpTiming timing;  ///< Accumulated across iterations, including final correspondence/diagnostic passes
     Eigen::Isometry3d transform = Eigen::Isometry3d::Identity();  ///< source -> target: y ~ transform * x
     double final_error = 0.0;  ///< RMS |r_n| over the final correspondences [m]
     double final_mean_abs_error = 0.0;  ///< mean |r_n| [m]
@@ -66,6 +82,35 @@ struct IcpResult
     bool converged = false;
     std::vector<IcpIterationLog> history;
 };
+
+/// Per-outer-iteration module timing, so a slow registration can be traced to the iteration and the
+/// module that caused it. Columns are the disjoint stages of IcpTiming plus two Ceres detail
+/// columns (lin.solv, cb_*) that run inside `solve` and must not be added to it.
+inline void PrintIterationTiming(std::ostream& out, const std::vector<IcpIterationLog>& history, const char* title = "Per-iteration module timing")
+{
+    if (history.empty())
+    {
+        return;
+    }
+    const auto flags = out.flags();
+    const auto precision = out.precision();
+    out << '\n' << title << " [ms]\n"
+        << std::right << std::setw(5) << "iter" << std::setw(8) << "corr" << std::setw(6) << "QR" << std::setw(10) << "search" << std::setw(9) << "pivot"
+        << std::setw(9) << "setup" << std::setw(10) << "blocks" << std::setw(10) << "solve" << std::setw(10) << "lin.solv" << std::setw(9) << "cb_res"
+        << std::setw(9) << "cb_jac" << std::setw(9) << "cleanup" << std::setw(8) << "pose" << std::setw(9) << "diag" << std::setw(10) << "total" << '\n';
+    for (const IcpIterationLog& iteration : history)
+    {
+        const IcpTiming& timing = iteration.timing;
+        out << std::right << std::setw(5) << iteration.iteration << std::setw(8) << iteration.correspondences << std::setw(6)
+            << (iteration.used_cuda_solver ? "cuda" : "cpu") << std::fixed << std::setprecision(3) << std::setw(10) << timing.correspondence_ms << std::setw(9)
+            << timing.pivot_ms << std::setw(9) << timing.problem_setup_ms << std::setw(10) << timing.residual_block_ms << std::setw(10)
+            << timing.ceres_solve_ms << std::setw(10) << timing.ceres_linear_solver_ms << std::setw(9) << timing.callback_residual_only_ms << std::setw(9)
+            << timing.callback_with_jacobian_ms << std::setw(9) << timing.problem_cleanup_ms << std::setw(8) << timing.pose_update_ms << std::setw(9)
+            << timing.diagnostic_ms << std::setw(10) << timing.total_ms << '\n';
+    }
+    out.flags(flags);
+    out.precision(precision);
+}
 
 /**
  * @brief Combined point-to-point and point-to-plane ICP
@@ -207,6 +252,7 @@ private:
                         double* max_abs) const;
 
     IcpOptions options_;
+    std::shared_ptr<ceres::Context> ceres_context_;  ///< Lazily initialized for CUDA solves; reused across scans
     common::PointCloud source_;
     common::PointCloud target_;
     common::KdTree3d target_tree_;

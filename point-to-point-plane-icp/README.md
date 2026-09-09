@@ -14,7 +14,7 @@ J_point = sqrt(w_point) * J_e
 J_plane = sqrt(w_plane) * n_y^T J_e
 ```
 
-On the CPU backend, `SharedErrorEvaluation::PrepareForEvaluation()` computes **one
+`SharedErrorEvaluation::PrepareForEvaluation()` always computes on CPU **one
 error vector and one Jacobian per correspondence** before residual evaluation. Both cost objects hold the
 same `shared_ptr<const SharedError>`. The callback updates the cache for every new
 Ceres evaluation point and supports a residual-only evaluation followed by a Jacobian
@@ -48,7 +48,7 @@ must outlive the problem, and its parameter array must remain alive throughout t
 ```bash
 # Standalone
 cmake -S point-to-point-plane-icp -B /tmp/hybrid-icp -DCMAKE_BUILD_TYPE=Release \
-  -DP2PTPL_ENABLE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=89
+  -DP2PTPL_ENABLE_CUDA=OFF
 cmake --build /tmp/hybrid-icp -j2
 ctest --test-dir /tmp/hybrid-icp --output-on-failure
 
@@ -60,7 +60,7 @@ ctest --test-dir /tmp/hybrid-icp --output-on-failure
 # ROS 2 workspace (build this dependency before LIO)
 colcon build --packages-select point_to_point_plane_icp gps_ground_truth lidar_inertial_odometer \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
-  -DP2PTPL_ENABLE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=89
+  -DP2PTPL_ENABLE_CUDA=OFF
 source install/setup.bash
 ros2 launch lidar_inertial_odometer kitti_lio.launch.py
 ```
@@ -77,55 +77,108 @@ Tests verify numerical Jacobians at nonzero poses, cache updates, 3+1 residual
 layout, weights, known-transform recovery, tangential motion on a single plane,
 invalid normals, missing correspondences and invalid weights.
 
+### Module timing
+
+`IcpOptions::collect_timing` (both demos enable it) fills `IcpResult::timing` and every
+`IcpIterationLog::timing` with per-module host wall time, reported at three levels so a slow
+registration can be traced from the pipeline down to the outer iteration that caused it:
+
+1. the host stages around `do_icp()`: TXT/PointCloud2 load, source copy, target kd-tree, the call;
+2. the modules inside `do_icp()`: `correspondence`, `pivot`, `problem_setup`, `residual_block`,
+   `ceres_solve`, `problem_cleanup`, `pose_update`, `diagnostic`, `other`. They are disjoint, add
+   up to `total_ms`, and each row shows its share of it. The `ceres_*` and `callback_*` rows below
+   them measure work **inside** `ceres_solve_ms` and overlap each other, so never sum those;
+3. per outer iteration, with `--iterations` (demo) or for the last scan pair (bag benchmark) --
+   this is where a one-off cost such as the first CUDA solve becomes visible.
+
+`hybrid_icp_demo --csv` writes every module and call count per registration;
+`bag_icp_benchmark --csv` adds the same columns to its per-frame file with an `icp_` prefix.
+`test_icp_timing` prints the module table for 500/2000/8000-point registrations and, when Ceres
+has CUDA, for CPU and GPU dense QR on the same 8000-point workload; `test_hybrid_icp` and
+`test_ceres_cuda_icp` print the breakdown of the registrations they already run. No test asserts
+on a duration -- the numbers are informational and only meaningful in a Release build.
+
 ## CUDA backend
 
-`P2PTPL_ENABLE_CUDA` defaults to `ON`. CUDA builds default `IcpOptions::use_cuda` to
-`true`; set it to `false` to use the original CPU evaluator. Both `hybrid_icp_demo`
-and `bag_icp_benchmark` accept `--backend cpu|cuda`; the ROS node exposes
-`icp_use_cuda`. The startup output identifies the selected backend.
+Residuals and analytic Jacobians always run on the CPU through
+`SharedErrorEvaluation`. `IcpOptions::use_cuda` / ROS `icp_use_cuda` / demo
+`--backend cpu|cuda` select **only the Ceres dense linear solver**:
 
-`CudaErrorEvaluation` uploads the fixed correspondences once per Ceres solve. One
-CUDA thread computes one correspondence's shared error, weighted 3D point residual,
-1D plane residual and both analytic Jacobians. The pose-wide rotation and derivative
-matrices are prepared once on the CPU. The kernel uses doubles and no fast-math.
-Two separate Ceres cost blocks copy from a pinned host cache, preserving independent
-Huber losses after weighting. GPU completion is synchronized before Ceres reads the
-cache, including multithreaded block evaluation. Device and pinned allocations are
-reused across the outer iterations of a registration. Residual-only requests skip
-Jacobian computation and transfer; a later same-pose Jacobian request refreshes them.
-
-The stock Ceres >= 2.1 `EvaluationCallback` API is sufficient. No custom Ceres fork
-or GPU rebuild is needed: see the official
-[EvaluationCallback documentation](https://ceres-solver.org/nnls_modeling.html#evaluationcallback).
-The six-parameter `DENSE_QR` solve, robustification, nearest-neighbour search and
-diagnostic RMS remain on the CPU. GPU initialization or execution errors are
-reported explicitly. There is no automatic CPU fallback after selecting CUDA.
-
-Build without any CUDA dependency:
-
-```bash
-cmake -S point-to-point-plane-icp -B /tmp/hybrid-cpu \
-  -DCMAKE_BUILD_TYPE=Release -DP2PTPL_ENABLE_CUDA=OFF
-cmake --build /tmp/hybrid-cpu -j4
-ctest --test-dir /tmp/hybrid-cpu --output-on-failure
+```text
+CPU: correspondence search -> residual/Jacobian -> robust loss + system assembly
+GPU: Ceres DENSE_QR (when use_cuda=true)
+CPU: step acceptance + pose update
 ```
 
-The CPU build defaults to CPU evaluation and rejects an explicit CUDA request.
-GPU tests require a working NVIDIA device and fail if it is unavailable.
+The default is CUDA when the linked Ceres library was built with CUDA support;
+otherwise it is Eigen CPU QR. GPU mode sets
+`dense_linear_algebra_library_type = ceres::CUDA` with `DENSE_QR` and requires
+Ceres built with `USE_CUDA=ON`. The installed `/usr/local` Ceres 2.1 already supports
+it. See the official
+[CUDA DENSE_QR documentation](https://ceres-solver.org/nnls_solving.html#dense-qr).
+The Ceres context is initialized lazily and reused across outer iterations and scans.
+`IcpIterationLog::used_cuda_solver` records the backend reported by Ceres.
+Selecting CUDA explicitly fails if unavailable; it does not silently switch to CPU.
 
-Validated on RTX 4060 Laptop, CUDA 12.3, Ceres 2.1, Release, architecture `89`:
+`P2PTPL_ENABLE_CUDA=OFF` is the default and disables building the **legacy custom
+CUDA residual evaluator**. It does not disable CUDA inside Ceres. This package
+requires no CUDA compilation in that configuration; the linked CUDA-enabled Ceres
+still requires its CUDA runtime libraries and an NVIDIA GPU. To run entirely on CPU
+with the same installation, use `--backend cpu` or `icp_use_cuda: false`. A Ceres build
+without CUDA support also defaults to CPU and rejects explicit GPU requests.
 
-- CPU and CUDA standalone suites pass. CUDA tests compare weighted residuals and
-  all 24 Jacobian entries with CPU results (absolute tolerance `5e-13`), and compare
-  analytic Jacobians against central differences (`1e-8`). They cover partial CUDA
-  blocks, buffer growth/reuse, stale caches, residual-to-Jacobian upgrades,
-  multithreaded Ceres evaluation and separate Huber losses.
-- Noisy/outlier registration agrees with CPU pose within `1e-7` matrix norm.
-- ROS 2 package tests and the message/TF/GPS integration test pass.
-- `compute-sanitizer --tool memcheck --error-exitcode 99 /tmp/hybrid-icp/test_cuda_icp`
-  reports zero errors.
+`test_ceres_cuda_icp` compares CPU residuals with CPU/GPU QR on noisy/outlier data,
+checks Ceres' actual backend, repeated solves and switching back to CPU. It is built
+independently of the legacy kernels, skips when Ceres lacks CUDA support, and
+requires a working GPU when Ceres supports CUDA. The ordinary hybrid tests cover
+residuals, Jacobians, shared cache updates and registration.
 
-GPU evaluation does not guarantee a faster full ICP solve. With the bundled 300-point
+The previous `CudaErrorEvaluation` source and its direct tests remain available
+through `-DP2PTPL_ENABLE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=89` for experimentation.
+ICP does not call that evaluator even when it is compiled. The separate
+`cuda-residual-tutorial` package continues to evaluate residuals on CUDA.
+
+### CPU residual/Jacobian + GPU QR validation
+
+On 2026-09-09, Release with `P2PTPL_ENABLE_CUDA=OFF` passed the hybrid residual,
+Ceres CPU/GPU QR parity, and LIO core suites. A 20-second headless KITTI launch
+reported `ICP residual/Jacobian backend: cpu; Ceres DENSE_QR: CUDA` and wrote
+69 LIO / 70 GPS trajectory rows.
+
+For the first 20 scan pairs of `/home/chanho/data/kitti/lidar`, using `/points_raw`,
+`/imu_raw`, rings 16–47 (all), maximum range 150 m, identity rotation guesses,
+constant-velocity translation and deskew off:
+
+| Mean compute time | CPU residual/Jacobian + CPU QR | CPU residual/Jacobian + GPU QR |
+|---|---:|---:|
+| ICP search + Ceres | 103.15 ms | 148.55 ms |
+| Per scan | 113.17 ms | 158.59 ms |
+
+Correspondence counts, outer iterations and convergence flags matched. The CSV
+residual RMS values matched at nine decimal places. Both runs reached the
+12-iteration limit on all pairs (exit code 2), so this is a timing/parity smoke check,
+not trajectory accuracy validation. Bag I/O, ROS and RViz are excluded. This short
+comparison still favors CPU QR on this workload.
+
+### Historical measurements
+
+The following results predate the CPU residual/Jacobian + GPU QR configuration.
+
+With CUDA QR enabled, a 20-pair KITTI smoke comparison on 2026-09-09 used
+`/home/chanho/data/kitti/lidar`, `/points_raw`, `/imu_raw`, rings 16–47 (all),
+maximum range 150 m, identity rotation initial guesses, constant-velocity translation,
+and deskew off. Mean per-scan compute times were 117.84 ms CPU / 166.05 ms CUDA;
+the ICP portions were 107.55 / 155.83 ms. Both runs reached the outer-iteration limit
+on all 20 pairs (exit code 2) with mean hybrid RMS 0.274 m. These are short
+scan-to-scan measurements excluding bag I/O and ROS/RViz, not full LIO timings or
+trajectory accuracy validation. CUDA QR is active but did not improve this workload.
+The installed ROS launch also produced LIO and GPS trajectories in a 20-second
+headless playback check with `Ceres DENSE_QR: CUDA` in its startup log.
+
+The timing measurements below are historical results from the residual/Jacobian-only
+CUDA implementation, when Ceres QR still ran on the CPU. They do not measure the
+current CUDA QR path. GPU evaluation does not guarantee a faster full ICP solve.
+With the bundled 300-point
 dataset, 5 warmups and 50 measured registrations, CPU/GPU ICP medians were
 6.94/10.93 ms on this machine; both converged 50/50 and recovered the reference pose
 to below `2e-14` m translation error. This small workload does not amortize CUDA
