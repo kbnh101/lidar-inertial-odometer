@@ -18,6 +18,14 @@ target_include_directories(p2ptpl_icp PUBLIC
 target_link_libraries(p2ptpl_icp PUBLIC Eigen3::Eigen Ceres::ceres)
 target_compile_options(p2ptpl_icp PRIVATE -Wall -Wextra -Wpedantic)
 set_target_properties(p2ptpl_icp PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+add_executable(hybrid_icp_demo app/main.cpp)
+target_link_libraries(hybrid_icp_demo PRIVATE p2ptpl_icp)
+target_compile_options(hybrid_icp_demo PRIVATE -Wall -Wextra -Wpedantic)
+target_compile_definitions(hybrid_icp_demo PRIVATE
+  P2PTPL_ICP_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../data"
+  P2PTPL_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
+
 option(BUILD_TESTING "Build hybrid ICP tests" ON)
 if(BUILD_TESTING)
   enable_testing()
@@ -27,6 +35,8 @@ if(BUILD_TESTING)
   add_test(NAME test_hybrid_icp COMMAND test_hybrid_icp)
 endif()
 install(TARGETS p2ptpl_icp EXPORT p2ptpl_icp_targets ARCHIVE DESTINATION lib LIBRARY DESTINATION lib)
+install(TARGETS hybrid_icp_demo RUNTIME DESTINATION lib/${PROJECT_NAME})
+install(FILES ../data/source_point.txt ../data/target_point.txt DESTINATION share/${PROJECT_NAME}/data)
 install(DIRECTORY include/ ${COMMON_DIR}/include/ DESTINATION include)
 if(ament_cmake_FOUND)
   ament_export_targets(p2ptpl_icp_targets HAS_LIBRARY_TARGET NAMESPACE point_to_point_plane_icp::)

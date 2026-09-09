@@ -71,10 +71,20 @@ target_include_directories(lio_core PUBLIC
 target_link_libraries(lio_core PUBLIC common_vendored point_to_point_plane_icp::p2ptpl_icp imu_preint_vendored Eigen3::Eigen)
 target_compile_options(lio_core PRIVATE -Wall -Wextra)
 
+find_package(rosbag2_cpp REQUIRED)
+find_package(rosbag2_storage REQUIRED)
+
 add_executable(lio_node src/lio_node.cpp)
 target_link_libraries(lio_node lio_core)
 ament_target_dependencies(lio_node rclcpp sensor_msgs nav_msgs geometry_msgs std_msgs tf2_ros)
 target_compile_options(lio_node PRIVATE -Wall -Wextra)
+
+# Offline bag benchmark: hybrid ICP over consecutive scans of a recorded bag, no ROS graph.
+add_executable(bag_icp_benchmark app/bag_icp_benchmark.cpp)
+target_link_libraries(bag_icp_benchmark lio_core)
+ament_target_dependencies(bag_icp_benchmark rclcpp sensor_msgs rosbag2_cpp rosbag2_storage)
+target_compile_definitions(bag_icp_benchmark PRIVATE LIO_BUILD_TYPE="${CMAKE_BUILD_TYPE}")
+target_compile_options(bag_icp_benchmark PRIVATE -Wall -Wextra)
 
 if(BUILD_TESTING)
   enable_testing()
@@ -84,7 +94,7 @@ if(BUILD_TESTING)
   add_test(NAME test_lio_core COMMAND test_lio_core)
 endif()
 
-install(TARGETS lio_node RUNTIME DESTINATION lib/${PROJECT_NAME})
+install(TARGETS lio_node bag_icp_benchmark RUNTIME DESTINATION lib/${PROJECT_NAME})
 install(TARGETS lio_core common_vendored imu_preint_vendored
   ARCHIVE DESTINATION lib LIBRARY DESTINATION lib)
 install(DIRECTORY include/ DESTINATION include)

@@ -22,10 +22,13 @@
   <depend>geometry_msgs</depend>
   <depend>tf2</depend>
   <depend>tf2_ros</depend>
+  <depend>rosbag2_cpp</depend>
+  <depend>rosbag2_storage</depend>
 
   <!-- Eigen 3.4.0 / Ceres 2.1.0 는 시스템 설치본 사용 (GTSAM, PCL 사용 금지) -->
 
   <exec_depend>rosbag2</exec_depend>
+  <exec_depend>rosbag2_storage_default_plugins</exec_depend>
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>gps_ground_truth</exec_depend>

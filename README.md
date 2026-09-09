@@ -185,3 +185,32 @@ KITTI accuracy or parity with point-to-plane. No full real bag benchmark was run
 With default equal weights, the ray-cast benchmark gave 7.16% drift with LOAM
 features and 99.90% with PCA features. The stable-sample PCA fixture gives 0.14%
 drift and 1.26 cm maximum relative position error.
+
+### Real bag matching benchmark
+
+`bag_icp_benchmark` registers consecutive scans of a recorded bag with the hybrid ICP,
+straight out of the bag file (no ROS graph, no playback). It reuses `FeatureExtractor`
+for the planar points and normals, takes the rotation of the initial guess from the gyro
+and the translation from the previous frame, and times conversion, feature extraction,
+kd-tree setup and the ICP loop separately.
+
+```bash
+ros2 run lidar_inertial_odometer bag_icp_benchmark \
+  --bag /path/to/rosbag2_dir --cloud-topic /center_lidar_points --imu-topic /center_lidar_imu \
+  --start 150 --frames 15 --gyro-bias 0.789 -1.791 -0.537 --csv /tmp/frames.csv
+# --help lists the ring band, range, normal, ICP and output options.
+```
+
+Measured on a 128-channel Hesai scan with its built-in IMU (460800 points per scan,
+10 Hz, Release, one core): 15 ms feature extraction, 1 ms kd-tree, 150 ms ICP over
+~9200 correspondences, so 169 ms per scan pair -- 1.7x slower than the 100 ms scan
+period. Halving the channels (`--ring-stride 4`) and the candidates per sector
+(`--max-planar-per-sector 20`) brings it to 38 ms per scan at ~2200 correspondences
+with the same plane residual, because the ICP cost is dominated by the number of
+residual blocks.
+
+Point and plane residuals are reported separately: on scan-to-scan data the point term
+cannot fall below roughly half the point spacing (0.23 m at a 0.4 m feature voxel) since
+the two scans never sample the same physical spot, while the plane term reaches 0.03 m.
+The gyro is an independent witness for the rotation: with the bias removed, the ICP
+rotation matched the integrated gyro to 0.04 deg per scan pair (0.77 deg of yaw per pair).

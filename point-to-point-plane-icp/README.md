@@ -51,12 +51,24 @@ cmake -S point-to-point-plane-icp -B /tmp/hybrid-icp -DCMAKE_BUILD_TYPE=Release
 cmake --build /tmp/hybrid-icp -j2
 ctest --test-dir /tmp/hybrid-icp --output-on-failure
 
+# Matching demo on data/*.txt: timing plus point/plane residuals (--help lists the options)
+/tmp/hybrid-icp/hybrid_icp_demo --repeat 10
+/tmp/hybrid-icp/hybrid_icp_demo --initial-pose 0.3 -0.1 0.05 0.02 -0.03 0.05 --expected-pose -0.2 -0.2 0 0 0 0
+
 # ROS 2 workspace (build this dependency before LIO)
 colcon build --packages-select point_to_point_plane_icp gps_ground_truth lidar_inertial_odometer \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 source install/setup.bash
 ros2 launch lidar_inertial_odometer kitti_lio.launch.py
 ```
+
+`hybrid_icp_demo` registers `data/source_point.txt` against `data/target_point.txt`
+(ROS 2: `ros2 run point_to_point_plane_icp hybrid_icp_demo`). It reports the wall time of
+the TXT load, the setup plus target kd-tree and the ICP loop separately over repeated runs
+(mean/median/p95/min/max), then the correspondence count, the hybrid RMS, the point and
+plane RMS and the recovered pose; `--expected-pose` adds the translation and rotation error.
+Build Release before quoting any number. It exits 0 when every measured run converged,
+1 on an input error and 2 otherwise.
 
 Tests verify numerical Jacobians at nonzero poses, cache updates, 3+1 residual
 layout, weights, known-transform recovery, tangential motion on a single plane,
