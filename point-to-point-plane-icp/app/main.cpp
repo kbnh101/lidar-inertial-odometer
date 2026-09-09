@@ -41,6 +41,7 @@ void Usage(const char* program)
               << "  --data-dir DIR          source_point.txt / target_point.txt (default: bundled data)\n"
               << "  --repeat N              measured independent registrations (default: 10)\n"
               << "  --warmup N              unmeasured registrations (default: 1)\n"
+              << "  --backend cpu|cuda      residual/Jacobian backend (default: cuda in CUDA builds)\n"
               << "  --point-weight W        positive point cost weight (default: 1)\n"
               << "  --plane-weight W        positive plane cost weight (default: 1)\n"
               << "  --max-distance M        correspondence distance threshold (default: 1 m)\n"
@@ -110,6 +111,13 @@ Arguments ParseArguments(int argc, char** argv)
         else if (option == "--warmup")
         {
             args.warmup = Count(next(), 0);
+        }
+        else if (option == "--backend")
+        {
+            const auto backend = next();
+            if (backend != "cpu" && backend != "cuda")
+                throw std::invalid_argument("backend must be cpu or cuda");
+            args.icp.use_cuda = backend == "cuda";
         }
         else if (option == "--point-weight")
         {
@@ -234,6 +242,7 @@ int main(int argc, char** argv)
         std::cout << "Hybrid ICP: " << source.size() << " source / " << target.size() << " target points\n"
                   << "data directory: " << std::filesystem::absolute(args.data_dir) << '\n'
                   << "build: " << P2PTPL_BUILD_TYPE << " (use Release for timing)\n"
+                  << "residual/Jacobian backend: " << (args.icp.use_cuda ? "cuda" : "cpu") << "; Ceres DENSE_QR: CPU\n"
                   << "weights: point=" << args.icp.point_weight << ", plane=" << args.icp.plane_weight << '\n'
                   << "max distance: " << args.icp.max_correspondence_distance << " m; max iterations: " << args.icp.max_iterations << '\n'
                   << "initial source -> target pose:\n" << args.initial_pose.matrix() << '\n'

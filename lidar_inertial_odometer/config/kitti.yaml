@@ -142,6 +142,8 @@ lidar_inertial_odometer:
     # ICP (point-to-plane-icp 구현체)
     # --------------------------------------------------------------------------
     icp_max_iterations: 12
+    # CUDA builds default to GPU; uncomment to force CPU evaluation for comparison.
+    # icp_use_cuda: false
     icp_solver_iterations: 6
     icp_max_correspondence_distance: 1.5
     icp_min_normal_dot: 0.5

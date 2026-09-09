@@ -149,3 +149,14 @@ TEST(HybridIcp, RejectsInvalidWeightsAndEmptyClouds)
     icp.mutable_options().plane_weight = NAN;
     EXPECT_THROW(icp.do_icp(MakeCloud(), MakeCloud()), std::invalid_argument);
 }
+
+#ifndef P2PTPL_HAS_CUDA
+TEST(HybridIcp, CpuBuildRejectsExplicitCudaRequest)
+{
+    EXPECT_FALSE(CudaEvaluationCompiled());
+    IcpPointToPointPlane icp;
+    EXPECT_FALSE(icp.options().use_cuda);
+    icp.mutable_options().use_cuda = true;
+    EXPECT_THROW(icp.do_icp(MakeCloud(), MakeCloud()), std::runtime_error);
+}
+#endif

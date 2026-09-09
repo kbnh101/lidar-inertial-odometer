@@ -319,6 +319,8 @@ private:
         odometer_.local_map().set_options(map_options);
 
         p2ptpl_icp::IcpOptions icp_options = odometer_.icp().options();
+        icp_options.use_cuda = Param<bool>("icp_use_cuda", icp_options.use_cuda);
+        RCLCPP_INFO(get_logger(), "ICP residual/Jacobian backend: %s; Ceres DENSE_QR: CPU", icp_options.use_cuda ? "cuda" : "cpu");
         icp_options.max_iterations = Param<int>("icp_max_iterations", 12);
         icp_options.max_solver_iterations = Param<int>("icp_solver_iterations", 6);
         icp_options.max_correspondence_distance = Param<double>("icp_max_correspondence_distance", 1.5);

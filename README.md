@@ -15,11 +15,13 @@ gps_ground_truth/         independent ament_cmake GPS reference node
 docker/                    Humble development container
 ```
 
-This is the **point-to-point-plane-icp** branch, based on the common ROS 2/GPS commit.
+This is the **gpu-residual-jacobian** branch, based on **point-to-point-plane-icp**.
 LIO links the new [`point_to_point_plane_icp` package](point-to-point-plane-icp/README.md).
-Point and plane costs share one error vector `e = R x + t - y` and its analytic
-Jacobian through a Ceres evaluation callback. Each correspondence adds two distinct
-residual blocks on the same pose: `sqrt(w_point) * e` and `sqrt(w_plane) * n^T e`.
+CUDA builds evaluate the weighted point/plane residuals and analytic Jacobians in
+double precision on the GPU, in one batch per Ceres evaluation. CPU evaluation is
+also available through `icp_use_cuda: false` or the demos' `--backend cpu` option.
+Each correspondence uses `e = R x + t - y` and adds two distinct residual blocks
+on the same pose: `sqrt(w_point) * e` and `sqrt(w_plane) * n^T e`.
 Both weights default to 1 and are exposed as `icp_point_weight` / `icp_plane_weight`.
 The GPS package stays independent of this matching method.
 
@@ -31,20 +33,33 @@ containing the checkout under `src/`:
 ```bash
 source /opt/ros/humble/setup.bash
 colcon build --packages-select point_to_point_plane_icp gps_ground_truth lidar_inertial_odometer \
-  --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+  --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON \
+  -DP2PTPL_ENABLE_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=89
 source install/setup.bash
 ros2 launch lidar_inertial_odometer kitti_lio.launch.py play:=false
 ```
 
+The GPU build requires CMake >= 3.18, a CUDA toolkit and an NVIDIA GPU. Architecture
+`89` above is for this machine's RTX 4060; adjust it for another GPU. The GPU path is
+enabled by default and reports CUDA failures without silently switching to CPU.
+Use `-DP2PTPL_ENABLE_CUDA=OFF` to build without the toolkit.
+
 Ceres 2.1 is required; Ubuntu 22.04's default Ceres 2.0 package is too old.
+The existing `/usr/local` Ceres 2.1 works unchanged. The evaluation callback runs our
+CUDA kernel; Ceres still uses CPU `DENSE_QR` for the six-parameter pose solve. A CUDA
+build of Ceres is not required for this residual/Jacobian path. Correspondence search,
+feature extraction, IMU processing and final error diagnostics remain on the CPU.
+See the [GPU build and validation notes](point-to-point-plane-icp/README.md#cuda-backend).
+
 The Dockerfile builds Ceres 2.1 from source and installs Eigen 3.4 from apt.
+The existing Docker image has no CUDA toolkit; use its CPU build below.
 
 ```bash
 ./docker/run.sh -d
 ./docker/exec.sh
 # In the container, at /home/clobot_assignment/dev_ws:
 colcon build --packages-select point_to_point_plane_icp gps_ground_truth lidar_inertial_odometer \
-  --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+  --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON -DP2PTPL_ENABLE_CUDA=OFF
 source install/setup.bash
 ```
 

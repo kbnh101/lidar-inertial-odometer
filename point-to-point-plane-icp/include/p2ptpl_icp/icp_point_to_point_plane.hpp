@@ -5,6 +5,7 @@
 
 #include "common/kdtree.hpp"
 #include "common/point_cloud.hpp"
+#include "p2ptpl_icp/cuda_error.hpp"
 
 namespace p2ptpl_icp
 {
@@ -36,6 +37,8 @@ struct IcpOptions
 
     double point_weight = 1.0;  ///< positive coefficient of ||e||^2
     double plane_weight = 1.0;  ///< positive coefficient of (n^T e)^2
+
+    bool use_cuda = CudaEvaluationCompiled();  ///< CUDA builds default to GPU evaluation; false selects CPU
 
     bool verbose = false;  ///< prints the per-iteration progress to stdout
 };

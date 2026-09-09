@@ -13,6 +13,15 @@
 
 namespace p2ptpl_icp
 {
+bool CudaEvaluationCompiled() noexcept
+{
+#ifdef P2PTPL_HAS_CUDA
+    return true;
+#else
+    return false;
+#endif
+}
+
 void IcpPointToPointPlane::set_source(const common::PointCloud& source)
 {
     source_ = source;
@@ -128,6 +137,15 @@ IcpResult IcpPointToPointPlane::do_icp(const Eigen::Isometry3d& initial_guess)
     if (!std::isfinite(options_.point_weight) || !std::isfinite(options_.plane_weight) || options_.point_weight <= 0 || options_.plane_weight <= 0)
         throw std::invalid_argument("both hybrid residual weights must be finite and positive");
 
+    if (options_.use_cuda && !CudaEvaluationCompiled())
+        throw std::runtime_error("CUDA residual evaluation was requested, but this library was built with P2PTPL_ENABLE_CUDA=OFF");
+#ifdef P2PTPL_HAS_CUDA
+    // Reuse device and pinned buffers across outer iterations of this registration.
+    std::unique_ptr<CudaErrorEvaluation> cuda_errors;
+    if (options_.use_cuda)
+        cuda_errors = std::make_unique<CudaErrorEvaluation>(options_.point_weight, options_.plane_weight);
+#endif
+
     IcpResult result;
     result.transform = initial_guess;
 
@@ -175,6 +193,13 @@ IcpResult IcpPointToPointPlane::do_icp(const Eigen::Isometry3d& initial_guess)
         SharedErrorEvaluation shared_errors(xi.data());
         ceres::Problem::Options problem_options;
         problem_options.evaluation_callback = &shared_errors;
+#ifdef P2PTPL_HAS_CUDA
+        if (cuda_errors)
+        {
+            cuda_errors->Reset(xi.data());
+            problem_options.evaluation_callback = cuda_errors.get();
+        }
+#endif
         ceres::Problem problem(problem_options);
         problem.AddParameterBlock(xi.data(), 6);
         ceres::LossFunction* loss = options_.huber_delta > 0.0 ? new ceres::HuberLoss(options_.huber_delta) : nullptr;
@@ -185,8 +210,18 @@ IcpResult IcpPointToPointPlane::do_icp(const Eigen::Isometry3d& initial_guess)
             // aligned frame, which is what makes xi = 0 mean "the current state".
             const Eigen::Vector3d source_point = result.transform * source_[correspondence.source_index].point - pivot;
             const Eigen::Vector3d target_point = target_[correspondence.target_index].point - pivot;
-            const auto error = shared_errors.Add(source_point, target_point, target_[correspondence.target_index].normal);
-            AddCorrespondenceResiduals(problem, error, xi.data(), loss, options_.point_weight, options_.plane_weight);
+#ifdef P2PTPL_HAS_CUDA
+            if (cuda_errors)
+            {
+                const auto index = cuda_errors->Add(source_point, target_point, target_[correspondence.target_index].normal);
+                AddCudaCorrespondenceResiduals(problem, *cuda_errors, index, xi.data(), loss);
+            }
+            else
+#endif
+            {
+                const auto error = shared_errors.Add(source_point, target_point, target_[correspondence.target_index].normal);
+                AddCorrespondenceResiduals(problem, error, xi.data(), loss, options_.point_weight, options_.plane_weight);
+            }
         }
 
         ceres::Solver::Options solver_options;
@@ -201,6 +236,10 @@ IcpResult IcpPointToPointPlane::do_icp(const Eigen::Isometry3d& initial_guess)
 
         ceres::Solver::Summary summary;
         ceres::Solve(solver_options, &problem, &summary);
+#ifdef P2PTPL_HAS_CUDA
+        if (cuda_errors && !cuda_errors->last_error().empty())
+            throw std::runtime_error(cuda_errors->last_error());
+#endif
         if (!summary.IsSolutionUsable())
         {
             result.converged = false;

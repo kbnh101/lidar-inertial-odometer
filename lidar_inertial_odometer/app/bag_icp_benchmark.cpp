@@ -140,6 +140,7 @@ void Usage(const char* program)
               << "  --min-normal-dot D      normal agreement threshold, -1 disables (default: 0.5)\n"
               << "  --huber D               Huber delta, 0 disables (default: 0.2)\n"
               << "  --point-weight W / --plane-weight W (default: 1 / 1)\n"
+              << "  --backend cpu|cuda (default: cuda in CUDA builds; Ceres DENSE_QR stays on CPU)\n"
               << "  --help\n"
               << "Exit codes: 0 every frame converged, 1 input/error, 2 at least one frame did not.\n";
 }
@@ -309,6 +310,13 @@ Arguments ParseArguments(int argc, char** argv)
         else if (option == "--huber")
         {
             args.icp.huber_delta = Number(next());
+        }
+        else if (option == "--backend")
+        {
+            const auto backend = next();
+            if (backend != "cpu" && backend != "cuda")
+                throw std::invalid_argument("backend must be cpu or cuda");
+            args.icp.use_cuda = backend == "cuda";
         }
         else if (option == "--point-weight")
         {
@@ -742,6 +750,7 @@ int main(int argc, char** argv)
                   << "initial guess : " << (args.use_imu_rotation ? "gyro rotation" : "identity rotation") << " + "
                   << (args.constant_velocity ? "constant velocity" : "zero translation") << (args.deskew ? ", deskew on" : ", deskew off") << '\n'
                   << "build         : " << LIO_BUILD_TYPE << " (use Release for timing)\n"
+                  << "backend       : " << (args.icp.use_cuda ? "cuda" : "cpu") << "; Ceres DENSE_QR: CPU\n"
                   << std::flush;
 
         rclcpp::Serialization<sensor_msgs::msg::PointCloud2> cloud_serialization;
