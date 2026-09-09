@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <chrono>
 
 namespace
 {
@@ -344,7 +345,11 @@ void LioOdometer::ProcessScan(const QueuedScan& scan)
             icp_target_version_ = map_version_;
         }
 
+        // Registration wall time only: the source copy and the (cached) target kd-tree above are
+        // outside it, exactly like the "ICP search + Ceres" row of bag_icp_benchmark.
+        const auto icp_begin = std::chrono::steady_clock::now();
         const p2pt_icp::IcpResult icp_result = icp_.do_icp(lidar_pose_prediction);
+        result.icp_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - icp_begin).count();
         result.icp_iterations = icp_result.iterations;
         result.icp_correspondences = icp_result.correspondences;
         result.icp_error = icp_result.final_error;
@@ -457,11 +462,11 @@ void LioOdometer::ProcessScan(const QueuedScan& scan)
         }
 
         std::printf(
-                "[lio] t=%.3f | feat %4d/%4d | map %6d | icp %s iter %2d corr %5d rms %.4f | "
+                "[lio] t=%.3f | feat %4d/%4d | map %6d | icp %s iter %2d corr %5d rms %.4f %7.2f ms | "
                 "p=(%8.2f %8.2f %6.2f) v=%.2f m/s%s\n",
                 scan.timestamp, result.num_features, features.num_candidates, result.num_map_points, icp_state, result.icp_iterations,
-                result.icp_correspondences, result.icp_error, updated.position.x(), updated.position.y(), updated.position.z(), updated.velocity.norm(),
-                keyframe_mark);
+                result.icp_correspondences, result.icp_error, result.icp_ms, updated.position.x(), updated.position.y(), updated.position.z(),
+                updated.velocity.norm(), keyframe_mark);
     }
 
     results_.push_back(std::move(result));

@@ -106,7 +106,7 @@ lidar_inertial_odometer:
     # 평면 특징 + 법선 추정
     #   normal_method: "neighborhood_pca" 또는 "loam_curvature"
     # --------------------------------------------------------------------------
-    normal_method: loam_curvature
+    normal_method: neighborhood_pca
 
     # (A) loam_curvature 전용
     curvature_window: 5
