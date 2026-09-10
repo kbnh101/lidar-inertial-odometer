@@ -141,14 +141,14 @@ lidar_inertial_odometer:
     # --------------------------------------------------------------------------
     # ICP (point-to-plane-icp 구현체)
     # --------------------------------------------------------------------------
-    icp_max_iterations: 12
-    icp_solver_iterations: 6
-    icp_max_correspondence_distance: 1.5
+    icp_max_iterations: 50
+    icp_solver_iterations: 50
+    icp_max_correspondence_distance: 3.0
     icp_translation_tolerance: 1.0e-4
     icp_rotation_tolerance: 1.0e-5
     icp_error_tolerance: 1.0e-6
-    icp_huber_delta: 0.2          # 실제 스캔에는 outlier 가 있으므로 필수
-    icp_verbose: false
+    icp_huber_delta: 0.1          # 실제 스캔에는 outlier 가 있으므로 필수
+    icp_verbose: true
 
     # --------------------------------------------------------------------------
     # ICP 결과 게이팅

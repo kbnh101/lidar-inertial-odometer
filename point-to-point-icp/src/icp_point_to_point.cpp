@@ -152,14 +152,14 @@ IcpResult IcpPointToPoint::do_icp(const Eigen::Isometry3d& initial_guess)
         }
 
         ceres::Solver::Options solver_options;
-        solver_options.linear_solver_type = ceres::DENSE_QR;
+        solver_options.linear_solver_type = ceres::DENSE_NORMAL_CHOLESKY;
         solver_options.trust_region_strategy_type = ceres::LEVENBERG_MARQUARDT;
         solver_options.max_num_iterations = options_.max_solver_iterations;
         solver_options.minimizer_progress_to_stdout = false;
         solver_options.logging_type = ceres::SILENT;
-        solver_options.function_tolerance = 1e-16;
-        solver_options.gradient_tolerance = 1e-18;
-        solver_options.parameter_tolerance = 1e-16;
+        solver_options.function_tolerance = 1e-6;
+        solver_options.gradient_tolerance = 1e-10;
+        solver_options.parameter_tolerance = 1e-8;
 
         ceres::Solver::Summary summary;
         ceres::Solve(solver_options, &problem, &summary);
