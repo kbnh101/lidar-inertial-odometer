@@ -486,7 +486,13 @@ PipelineOutcome RunPipeline(NormalMethod method, bool enable_deskew)
     feature_options.min_range = 1.0;
     odometer.feature_extractor().set_options(feature_options);
 
-    p2p_icp::IcpOptions icp_options = odometer.icp().options();
+    fused_icp::IcpOptions icp_options = odometer.icp().options();
+    // Same fused weights as kitti.yaml. The ray-cast scene resamples every surface each frame, so
+    // nearest map points are never the same physical point and the point-to-point term is biased
+    // along the tangent plane: alpha = 0 reproduces pure point-to-plane (drift 0.2 %), alpha <= 0.01
+    // stays within the thresholds below, alpha >= 0.05 drifts more than 0.5 %.
+    icp_options.point_weight = 0.01;
+    icp_options.plane_weight = 1.0;
     icp_options.max_iterations = 15;
     icp_options.max_correspondence_distance = 1.5;
     icp_options.min_normal_dot = 0.5;

@@ -317,14 +317,14 @@ void LioOdometer::ProcessScan(const QueuedScan& scan)
     }
 
     // --- 3. planar features + normal estimation ----------------------------------
-    // KITTI clouds carry no normals, yet point-to-plane ICP absolutely needs target normals.
+    // KITTI clouds carry no normals, yet the fused residual absolutely needs target normals.
     // The normals built here ride into the map when this scan becomes a keyframe, and then serve as
     // the target of the next frame.
     const FeatureCloud features = feature_extractor_.Extract(corrected);
     result.num_features = static_cast<int>(features.planar.size());
     result.num_map_points = static_cast<int>(local_map_.cloud().size());
 
-    // --- 4. scan-to-map point-to-plane ICP ---------------------------------------
+    // --- 4. scan-to-map fused point-to-point + point-to-plane ICP ----------------
     // source = this scan's planar features (lidar frame), target = local map (world frame),
     // so the transform ICP returns is exactly the world <- lidar pose.
     const Eigen::Isometry3d lidar_pose_prediction = predicted.isometry() * options_.T_imu_lidar;
@@ -340,7 +340,7 @@ void LioOdometer::ProcessScan(const QueuedScan& scan)
             icp_target_version_ = map_version_;
         }
 
-        const p2p_icp::IcpResult icp_result = icp_.do_icp(lidar_pose_prediction);
+        const fused_icp::IcpResult icp_result = icp_.do_icp(lidar_pose_prediction);
         result.icp_iterations = icp_result.iterations;
         result.icp_correspondences = icp_result.correspondences;
         result.icp_error = icp_result.final_error;

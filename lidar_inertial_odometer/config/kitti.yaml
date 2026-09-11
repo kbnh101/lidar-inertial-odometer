@@ -139,8 +139,17 @@ lidar_inertial_odometer:
     keyframe_rotation: 0.18
 
     # --------------------------------------------------------------------------
-    # ICP (point-to-plane-icp 구현체)
+    # ICP (fused-point-plane-icp 구현체)
+    #   대응쌍 하나당 3차원 융합 residual r_f = L e,  |r_f|^2 = alpha |e|^2 + beta (n^T e)^2.
+    #   접평면 방향 오차는 alpha, 법선 방향 오차는 alpha + beta 로 가중된다.
+    #   alpha = 0 이면 순수 point-to-plane, beta = 0 이면 순수 point-to-point.
+    #   scan-to-map 은 같은 물리점이 다시 샘플링되지 않으므로 point 항(alpha)은
+    #   작게 두고, 단일 평면에서 생기는 접평면 방향 퇴화만 막는 용도로 쓴다.
+    #   합성 테스트(test_lio_core) 기준 alpha <= 0.01 이면 point-to-plane 과 같은
+    #   드리프트, alpha >= 0.05 부터 접평면 편향으로 드리프트가 는다.
     # --------------------------------------------------------------------------
+    icp_point_weight: 0.01        # alpha
+    icp_plane_weight: 1.0         # beta
     icp_max_iterations: 12
     icp_solver_iterations: 6
     icp_max_correspondence_distance: 1.5
@@ -148,7 +157,7 @@ lidar_inertial_odometer:
     icp_translation_tolerance: 1.0e-4
     icp_rotation_tolerance: 1.0e-5
     icp_error_tolerance: 1.0e-6
-    icp_huber_delta: 0.2          # 실제 스캔에는 outlier 가 있으므로 필수
+    icp_huber_delta: 0.2          # |r_f| 에 대한 joint Huber. 실제 스캔에는 outlier 가 있으므로 필수
     icp_verbose: false
 
     # --------------------------------------------------------------------------

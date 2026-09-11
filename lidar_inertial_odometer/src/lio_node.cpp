@@ -181,13 +181,16 @@ public:
                 ++selected;
             }
         }
-        RCLCPP_INFO(get_logger(), "lidar_inertial_odometer ready");
+        RCLCPP_INFO(get_logger(), "lidar_inertial_odometer ready (fused point-to-point + point-to-plane ICP)");
         RCLCPP_INFO(get_logger(), "  topics : lidar='%s' imu='%s'", lidar_topic_.c_str(), imu_topic_.c_str());
         RCLCPP_INFO(get_logger(), "  frames : %s -> %s -> %s", odom_frame_.c_str(), base_frame_.c_str(), lidar_frame_.c_str());
         RCLCPP_INFO(get_logger(), "  ring   : selection=%s band=[%d,%d] -> %d/%d ch (dropped %d above + %d below)",
                     ToString(feature_options.ring_selection).c_str(), feature_options.ring_min, feature_options.ring_max, selected,
                     feature_options.num_channels, feature_options.num_channels - 1 - feature_options.ring_max, feature_options.ring_min);
         RCLCPP_INFO(get_logger(), "  normal : %s", ToString(feature_options.normal_method).c_str());
+        const fused_icp::IcpOptions& icp_options = odometer_.icp().options();
+        RCLCPP_INFO(get_logger(), "  icp    : alpha (point) %.3g, beta (plane) %.3g, huber %.3g m", icp_options.point_weight, icp_options.plane_weight,
+                    icp_options.huber_delta);
     }
 
     ~LioNode()
@@ -318,7 +321,7 @@ private:
         map_options.crop_radius = Param<double>("map_crop_radius", 80.0);
         odometer_.local_map().set_options(map_options);
 
-        p2p_icp::IcpOptions icp_options = odometer_.icp().options();
+        fused_icp::IcpOptions icp_options = odometer_.icp().options();
         icp_options.max_iterations = Param<int>("icp_max_iterations", 12);
         icp_options.max_solver_iterations = Param<int>("icp_solver_iterations", 6);
         icp_options.max_correspondence_distance = Param<double>("icp_max_correspondence_distance", 1.5);
@@ -327,6 +330,8 @@ private:
         icp_options.rotation_tolerance = Param<double>("icp_rotation_tolerance", 1e-5);
         icp_options.error_tolerance = Param<double>("icp_error_tolerance", 1e-6);
         icp_options.huber_delta = Param<double>("icp_huber_delta", 0.2);
+        icp_options.point_weight = Param<double>("icp_point_weight", 0.01);
+        icp_options.plane_weight = Param<double>("icp_plane_weight", 1.0);
         icp_options.verbose = Param<bool>("icp_verbose", false);
         odometer_.icp().set_options(icp_options);
 
