@@ -206,5 +206,32 @@ python3 src/lidar-inertial-odometer/lidar_inertial_odometer/scripts/plot_traject
   --est /tmp/lio_trajectory.txt --gt /tmp/lio_gt.txt --out /tmp/trajectory.png
 ```
 
+### Comparing the matching methods on a bag
+
+The matchers live on different branches, so [compare_matchers.py](lidar_inertial_odometer/scripts/compare_matchers.py)
+makes a git worktree per branch, builds each with colcon, runs that build's `lio_node` +
+`gps_ground_truth_node`, and replays the bag with
+[paced_bag_player.py](lidar_inertial_odometer/scripts/paced_bag_player.py) -- a player that
+republishes the serialized bag messages and holds the next scan until `~/odometry` answers
+the previous one, so a slow matcher never drops scans and a fast one never waits.
+[evaluate_trajectories.py](lidar_inertial_odometer/scripts/evaluate_trajectories.py) then
+aligns each estimate to the GPS GT by **yaw only** on the first straight segment (the initial
+IMU heading is not reliable), and prints/plots xy ATE, end-point drift, KITTI-style relative
+error over 100-800 m segments (median; GPS multipath inflates the mean) and the per-scan
+ICP time parsed from the node log.
+
+```bash
+python3 src/lidar-inertial-odometer/lidar_inertial_odometer/scripts/compare_matchers.py \
+  --bag ~/data/kitti/lidar --work ~/lio_eval                    # p2plane tight/loose, p2point, fused, fused alpha=0
+python3 .../compare_matchers.py --bag ~/data/kitti/lidar --work ~/lio_eval --common-frontend   # same front-end for all
+python3 .../compare_matchers.py --work ~/lio_eval --evaluate-only                              # tables and plots only
+```
+
+Results on KITTI 2011_09_30_0028 are in
+[results/matcher_comparison/README.md](lidar_inertial_odometer/results/matcher_comparison/README.md):
+with a common front-end, tightly coupled point-to-plane has the lowest xy ATE (7.5 m over
+4.2 km, 80 ms ICP), fused is second (8.6 m, 18 ms) and the best per millisecond, loose
+point-to-plane / point-to-point / fused alpha=0 tie at 10.6-10.9 m (14 / 96 / 15 ms).
+
 The ROS1 trajectory numbers are not a ROS2 benchmark; evaluate a full converted bag
 before comparing matching accuracy on real data.
