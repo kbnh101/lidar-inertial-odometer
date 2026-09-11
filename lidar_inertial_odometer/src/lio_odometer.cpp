@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <chrono>
 
 namespace
 {
@@ -317,14 +318,14 @@ void LioOdometer::ProcessScan(const QueuedScan& scan)
     }
 
     // --- 3. planar features + normal estimation ----------------------------------
-    // KITTI clouds carry no normals, yet point-to-plane ICP absolutely needs target normals.
+    // KITTI clouds carry no normals, yet the fused residual absolutely needs target normals.
     // The normals built here ride into the map when this scan becomes a keyframe, and then serve as
     // the target of the next frame.
     const FeatureCloud features = feature_extractor_.Extract(corrected);
     result.num_features = static_cast<int>(features.planar.size());
     result.num_map_points = static_cast<int>(local_map_.cloud().size());
 
-    // --- 4. scan-to-map point-to-plane ICP ---------------------------------------
+    // --- 4. scan-to-map fused point-to-point + point-to-plane ICP ----------------
     // source = this scan's planar features (lidar frame), target = local map (world frame),
     // so the transform ICP returns is exactly the world <- lidar pose.
     const Eigen::Isometry3d lidar_pose_prediction = predicted.isometry() * options_.T_imu_lidar;
@@ -340,7 +341,9 @@ void LioOdometer::ProcessScan(const QueuedScan& scan)
             icp_target_version_ = map_version_;
         }
 
-        const p2p_icp::IcpResult icp_result = icp_.do_icp(lidar_pose_prediction);
+        const auto icp_begin = std::chrono::steady_clock::now();
+        const fused_icp::IcpResult icp_result = icp_.do_icp(lidar_pose_prediction);
+        result.icp_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - icp_begin).count();    
         result.icp_iterations = icp_result.iterations;
         result.icp_correspondences = icp_result.correspondences;
         result.icp_error = icp_result.final_error;
@@ -453,10 +456,10 @@ void LioOdometer::ProcessScan(const QueuedScan& scan)
         }
 
         std::printf(
-                "[lio] t=%.3f | feat %4d/%4d | map %6d | icp %s iter %2d corr %5d rms %.4f | "
+                "[lio] t=%.3f | feat %4d/%4d | map %6d | icp %s iter %2d corr %5d rms %.4f %7.2f ms | "
                 "p=(%8.2f %8.2f %6.2f) v=%.2f m/s%s\n",
                 scan.timestamp, result.num_features, features.num_candidates, result.num_map_points, icp_state, result.icp_iterations,
-                result.icp_correspondences, result.icp_error, updated.position.x(), updated.position.y(), updated.position.z(),
+                result.icp_correspondences, result.icp_error, result.icp_ms, updated.position.x(), updated.position.y(), updated.position.z(),
                 updated.velocity.norm(), keyframe_mark);
     }
 

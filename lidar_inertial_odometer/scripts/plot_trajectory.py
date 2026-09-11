@@ -147,6 +147,7 @@ def main():
     out_directory = os.path.dirname(os.path.abspath(args.out))
     if out_directory:
         os.makedirs(out_directory, exist_ok=True)
+    
     figure.savefig(args.out, dpi=150)
     print(f'saved {args.out}')
 

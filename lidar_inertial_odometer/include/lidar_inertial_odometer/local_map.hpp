@@ -10,7 +10,7 @@
  * @brief Sliding-window local map that serves as the target of the scan-to-map ICP
  *
  * Each keyframe holds a world frame cloud, and the merged cloud handed to
- * `IcpPointToPlane::set_target()` is rebuilt whenever a keyframe is added or evicted.
+ * `IcpFusedPointPlane::set_target()` is rebuilt whenever a keyframe is added or evicted.
  *
  * A window is kept instead of a global map for two reasons: it holds the kd-tree size constant, and
  * it stops old observations, whose drift has accumulated, from pulling on the current registration.

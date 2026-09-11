@@ -269,6 +269,7 @@ struct LioFrameResult
     int icp_iterations = 0;
     int icp_correspondences = 0;
     double icp_error = 0.0;
+    double icp_ms = 0.0;
     int num_features = 0;
     int num_map_points = 0;
     bool is_keyframe = false;
