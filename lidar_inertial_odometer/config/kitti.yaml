@@ -90,8 +90,8 @@ lidar_inertial_odometer:
     #         (2) 대역 [0,63]  + stride 2 <- 전 대역에서 짝수 ring 32 개
     ring_selection: all
     num_channels: 64
-    ring_min: 16                  # 이보다 아래 채널(0..15)은 버린다
-    ring_max: 47                  # 이보다 위  채널(48..63)은 버린다
+    ring_min: 31                  # 이보다 아래 채널(0..15)은 버린다
+    ring_max: 63                  # 이보다 위  채널(48..63)은 버린다
     ring_stride: 2                # ring_selection: stride 일 때만 쓰인다
 
     vertical_fov_min_deg: -24.8   # HDL-64E (ring 필드가 없는 bag 대비용 복원 파라미터)
@@ -106,7 +106,7 @@ lidar_inertial_odometer:
     # 평면 특징 + 법선 추정
     #   normal_method: "neighborhood_pca" 또는 "loam_curvature"
     # --------------------------------------------------------------------------
-    normal_method: loam_curvature
+    normal_method: neighborhood_pca
 
     # (A) loam_curvature 전용
     curvature_window: 5
@@ -127,13 +127,13 @@ lidar_inertial_odometer:
     min_planarity: 0.0            # (lambda1-lambda0)/lambda2 하한. 0 이면 비활성.
                                   # LiDAR 패치는 비등방이라 이 지표가 잘 안 맞는다
                                   # (feature_extractor.hpp 주석 참조).
-    feature_voxel_size: 0.4       # PCA 이웃 탐색용 downsample [m]
+    feature_voxel_size: 0.5       # PCA 이웃 탐색용 downsample [m]
 
     # --------------------------------------------------------------------------
     # Local map = submap (scan-to-map ICP 의 target, ~/submap 으로 publish)
     # --------------------------------------------------------------------------
     map_max_keyframes: 25
-    map_voxel_size: 0.4
+    map_voxel_size: 0.5
     map_crop_radius: 80.0
     keyframe_translation: 1.0
     keyframe_rotation: 0.18
@@ -148,7 +148,7 @@ lidar_inertial_odometer:
     #   합성 테스트(test_lio_core) 기준 alpha <= 0.01 이면 point-to-plane 과 같은
     #   드리프트, alpha >= 0.05 부터 접평면 편향으로 드리프트가 는다.
     # --------------------------------------------------------------------------
-    icp_point_weight: 0.1        # alpha
+    icp_point_weight: 0.01        # alpha
     icp_plane_weight: 1.0         # beta
     icp_max_iterations: 12
     icp_solver_iterations: 6
