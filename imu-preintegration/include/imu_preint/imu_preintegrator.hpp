@@ -38,6 +38,12 @@ public:
      * @brief Resets the interval to dR = I, dv = 0, dp = 0
      */
     void reset();
+    void reset(const Eigen::Vector3d& gyro_bias, const Eigen::Vector3d& accel_bias);
+    void set_noise(const ImuNoise& noise);
+    /// Rebuild the interval at a new bias using retained raw samples.
+    void reintegrate(const Eigen::Vector3d& gyro_bias, const Eigen::Vector3d& accel_bias);
+    /// Corrects geometry only; covariance/Jacobian metadata remain at the integration bias.
+    PreintegratedDelta corrected_delta(const Eigen::Vector3d& gyro_bias, const Eigen::Vector3d& accel_bias) const;
 
     /**
      * @brief Integrates one IMU sample through the recursion
@@ -67,6 +73,9 @@ public:
     /**
      * @brief Preintegrated measurement at relative time @p t_rel inside the interval, for deskewing
      *
+     * Only rotation/velocity/position/dt are interpolated. For an optimization factor and its
+     * uncertainty, integrate that exact interval and use delta() instead.
+     *
      * @param t_rel relative time from the start of the interval [s]
      * @return preintegrated measurement up to that time
      */
@@ -93,6 +102,13 @@ public:
     }
 
 private:
+    struct Sample
+    {
+        Eigen::Vector3d gyro, accel;
+        double dt;
+    };
+    ImuNoise noise_;
+    std::vector<Sample> samples_;
     PreintegratedDelta delta_;
 
     // Per-step log used by delta_at(), in ascending t_rel.

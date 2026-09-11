@@ -31,15 +31,20 @@ set(P2P_ICP_DATA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../data")
 
 add_library(p2p_icp
   src/icp_point_to_plane.cpp
+  src/tightly_coupled.cpp
   ${COMMON_DIR}/src/rotation.cpp
   ${COMMON_DIR}/src/point_cloud.cpp
   ${COMMON_DIR}/src/kdtree.cpp
 )
+set(IMU_PREINT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../imu-preintegration" CACHE PATH "IMU preintegration checkout")
+if(NOT TARGET imu_preint)
+  add_subdirectory(${IMU_PREINT_DIR} ${CMAKE_CURRENT_BINARY_DIR}/imu-preintegration)
+endif()
 target_include_directories(p2p_icp PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/include
   ${COMMON_DIR}/include
 )
-target_link_libraries(p2p_icp PUBLIC Eigen3::Eigen Ceres::ceres)
+target_link_libraries(p2p_icp PUBLIC Eigen3::Eigen Ceres::ceres imu_preint)
 target_compile_options(p2p_icp PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(icp_demo app/main.cpp)
@@ -55,6 +60,9 @@ if(P2P_ICP_BUILD_TESTS)
     target_link_libraries(test_icp PRIVATE p2p_icp GTest::gtest GTest::gtest_main)
     target_compile_definitions(test_icp PRIVATE P2P_ICP_DATA_DIR="${P2P_ICP_DATA_DIR}")
     add_test(NAME test_icp COMMAND test_icp)
+    add_executable(test_tightly_coupled test/test_tightly_coupled.cpp)
+    target_link_libraries(test_tightly_coupled PRIVATE p2p_icp GTest::gtest_main)
+    add_test(NAME test_tightly_coupled COMMAND test_tightly_coupled)
   else()
     message(STATUS "GTest not found -- skipping the test target (build the demo only).")
   endif()

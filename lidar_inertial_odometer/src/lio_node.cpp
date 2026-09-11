@@ -256,6 +256,31 @@ private:
 
         options.velocity_correction_gain = Param<double>("velocity_correction_gain", 0.9);
 
+        options.use_tightly_coupled = Param<bool>("use_tightly_coupled", true);
+        options.imu_noise.gyro = Param<double>("imu_gyro_noise", 0.002);
+        options.imu_noise.accel = Param<double>("imu_accel_noise", 0.02);
+        options.imu_noise.gyro_bias = Param<double>("imu_gyro_bias_random_walk", 0.0002);
+        options.imu_noise.accel_bias = Param<double>("imu_accel_bias_random_walk", 0.002);
+        options.tightly_coupled.lidar_sigma = Param<double>("lidar_plane_sigma", 0.1);
+        options.tightly_coupled.gyro_reintegration_threshold = Param<double>("gyro_reintegration_threshold", 0.01);
+        options.tightly_coupled.accel_reintegration_threshold = Param<double>("accel_reintegration_threshold", 0.1);
+        options.deskew_iterations = Param<int>("tight_deskew_iterations", 3);
+        const auto gyro_bias = VectorParam("initial_gyro_bias", {0.0, 0.0, 0.0});
+        const auto accel_bias = VectorParam("initial_accel_bias", {0.0, 0.0, 0.0});
+        if (gyro_bias.size() != 3 || accel_bias.size() != 3)
+            throw std::invalid_argument("Initial IMU biases must have three components");
+        options.initial_gyro_bias = Eigen::Map<const Eigen::Vector3d>(gyro_bias.data());
+        options.initial_accel_bias = Eigen::Map<const Eigen::Vector3d>(accel_bias.data());
+        imu_preint::Vector15d initial_sigma;
+        initial_sigma << Eigen::Vector3d::Constant(Param<double>("initial_rotation_sigma", 0.02)),
+                         Eigen::Vector3d::Constant(Param<double>("initial_position_sigma", 0.01)),
+                         Eigen::Vector3d::Constant(Param<double>("initial_velocity_sigma", 10.0)),
+                         Eigen::Vector3d::Constant(Param<double>("initial_gyro_bias_sigma", 0.05)),
+                         Eigen::Vector3d::Constant(Param<double>("initial_accel_bias_sigma", 0.5));
+        if (!initial_sigma.allFinite() || (initial_sigma.array() <= 0.0).any())
+            throw std::invalid_argument("Initial state standard deviations must be finite and positive");
+        options.initial_covariance = initial_sigma.array().square().matrix().asDiagonal();
+
         options.enable_deskew = Param<bool>("enable_deskew", true);
         options.scan_period = Param<double>("scan_period", 0.1);
         options.keep_deskewed_scan = publish_scan_cloud_;

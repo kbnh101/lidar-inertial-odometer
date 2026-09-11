@@ -1,5 +1,7 @@
 #pragma once
 
+#include "p2p_icp/tightly_coupled.hpp"
+
 // Shared data types for the whole package.
 //
 // Class headers hold classes only; the plain-data enum classes / structs and their conversion
@@ -219,6 +221,13 @@ struct LocalMapOptions
 /// LioOdometer runtime parameters, filled in by the node from rosparam.
 struct LioOptions
 {
+    bool use_tightly_coupled = true;
+    imu_preint::ImuNoise imu_noise;
+    p2p_icp::TightlyCoupledOptions tightly_coupled;
+    int deskew_iterations = 3;  ///< rebuild the scan with the estimated velocity/bias; reuse the same prior
+    Eigen::Vector3d initial_gyro_bias = Eigen::Vector3d::Zero();
+    Eigen::Vector3d initial_accel_bias = Eigen::Vector3d::Zero();
+    imu_preint::Matrix15d initial_covariance = p2p_icp::NavStatePrior::InitialCovariance();
     // --- frames and constants -------------------------------------------------
     /// T_imu_lidar: moves a point from the lidar frame into the imu (body) frame.
     /// KITTI's calib_imu_to_velo.txt gives T_velo_imu, so this is its inverse.
@@ -269,6 +278,7 @@ struct LioFrameResult
     int icp_iterations = 0;
     int icp_correspondences = 0;
     double icp_error = 0.0;
+    double icp_ms = 0.0;
     int num_features = 0;
     int num_map_points = 0;
     bool is_keyframe = false;

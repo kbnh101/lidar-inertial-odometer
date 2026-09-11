@@ -172,6 +172,7 @@ private:
      * @param scan the scan to process
      */
     void ProcessScan(const QueuedScan& scan);
+    void ProcessTightlyCoupledScan(const QueuedScan& scan);
 
     /**
      * @brief Drops IMU samples the odometer has already consumed, keeping one for interpolation
@@ -223,7 +224,7 @@ private:
 
     LioOptions options_;
     FeatureExtractor feature_extractor_;
-    p2p_icp::IcpPointToPlane icp_;  ///< the point-to-plane-icp implementation, reused as is
+    p2p_icp::IcpPointToPlane icp_;  ///< selectable standalone or tightly coupled solver
     LocalMap local_map_;
     imu_preint::ImuPreintegrator preintegrator_;
 
@@ -237,6 +238,11 @@ private:
     /// The initial velocity is 0, so the first ICP correction is taken whole, with unit gain.
     bool velocity_initialized_ = false;
     imu_preint::NavState state_;
+    imu_preint::Matrix15d state_covariance_ = p2p_icp::NavStatePrior::InitialCovariance();
+    // Retain the first sweep until the next scan makes its starting velocity observable.
+    std::vector<RawLidarPoint> bootstrap_points_;
+    imu_preint::ImuPreintegrator bootstrap_integrator_;
+    imu_preint::NavState bootstrap_state_;
 
     Eigen::Isometry3d last_keyframe_pose_ = Eigen::Isometry3d::Identity();
     bool has_keyframe_ = false;

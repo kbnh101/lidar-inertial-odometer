@@ -90,8 +90,8 @@ lidar_inertial_odometer:
     #         (2) 대역 [0,63]  + stride 2 <- 전 대역에서 짝수 ring 32 개
     ring_selection: all
     num_channels: 64
-    ring_min: 16                  # 이보다 아래 채널(0..15)은 버린다
-    ring_max: 47                  # 이보다 위  채널(48..63)은 버린다
+    ring_min: 30                  # 이보다 아래 채널(0..15)은 버린다
+    ring_max: 63                  # 이보다 위  채널(48..63)은 버린다
     ring_stride: 2                # ring_selection: stride 일 때만 쓰인다
 
     vertical_fov_min_deg: -24.8   # HDL-64E (ring 필드가 없는 bag 대비용 복원 파라미터)
@@ -127,13 +127,13 @@ lidar_inertial_odometer:
     min_planarity: 0.0            # (lambda1-lambda0)/lambda2 하한. 0 이면 비활성.
                                   # LiDAR 패치는 비등방이라 이 지표가 잘 안 맞는다
                                   # (feature_extractor.hpp 주석 참조).
-    feature_voxel_size: 0.4       # PCA 이웃 탐색용 downsample [m]
+    feature_voxel_size: 0.7       # PCA 이웃 탐색용 downsample [m]
 
     # --------------------------------------------------------------------------
     # Local map = submap (scan-to-map ICP 의 target, ~/submap 으로 publish)
     # --------------------------------------------------------------------------
     map_max_keyframes: 25
-    map_voxel_size: 0.4
+    map_voxel_size: 0.7
     map_crop_radius: 80.0
     keyframe_translation: 1.0
     keyframe_rotation: 0.18
@@ -149,7 +149,7 @@ lidar_inertial_odometer:
     icp_rotation_tolerance: 1.0e-5
     icp_error_tolerance: 1.0e-6
     icp_huber_delta: 0.2          # 실제 스캔에는 outlier 가 있으므로 필수
-    icp_verbose: false
+    icp_verbose: true
 
     # --------------------------------------------------------------------------
     # ICP 결과 게이팅
@@ -162,3 +162,23 @@ lidar_inertial_odometer:
     # ICP -> IMU 되먹임 (속도 보정)
     # --------------------------------------------------------------------------
     velocity_correction_gain: 0.9
+
+    # Joint point-to-plane + IMU optimization. false selects the original do_icp pipeline.
+    use_tightly_coupled: true
+    # Continuous-time densities: measurement units / sqrt(Hz), bias units / sqrt(s).
+    # Starting values, to be calibrated for the actual IMU.
+    imu_gyro_noise: 0.002
+    imu_accel_noise: 0.02
+    imu_gyro_bias_random_walk: 0.0002
+    imu_accel_bias_random_walk: 0.002
+    lidar_plane_sigma: 0.1        # m; icp_huber_delta remains in metres
+    gyro_reintegration_threshold: 0.01
+    accel_reintegration_threshold: 0.1
+    tight_deskew_iterations: 3
+    initial_gyro_bias: [0.0, 0.0, 0.0]
+    initial_accel_bias: [0.0, 0.0, 0.0]
+    initial_rotation_sigma: 0.02  # rad; anchors the initial world frame
+    initial_position_sigma: 0.01 # m
+    initial_velocity_sigma: 10.0 # m/s; allows initialization while moving
+    initial_gyro_bias_sigma: 0.05 # rad/s
+    initial_accel_bias_sigma: 0.5 # m/s^2

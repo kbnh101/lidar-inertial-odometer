@@ -5,6 +5,7 @@
 
 #include "common/kdtree.hpp"
 #include "common/point_cloud.hpp"
+#include "p2p_icp/tightly_coupled.hpp"
 
 namespace p2p_icp
 {
@@ -59,6 +60,15 @@ struct IcpResult
     int correspondences = 0;
     bool converged = false;
     std::vector<IcpIterationLog> history;
+};
+
+struct TightlyCoupledResult
+{
+    IcpResult icp;
+    NavStatePrior posterior;  ///< current state and covariance after marginalizing the previous state
+    imu_preint::NavState previous_state;  ///< nuisance state; historical map poses remain fixed
+    bool usable = false;
+    bool lidar_accepted = false;
 };
 
 /**
@@ -130,6 +140,16 @@ public:
      * @return the final relative pose plus the error and convergence information
      */
     IcpResult do_icp(const Eigen::Isometry3d& initial_guess = Eigen::Isometry3d::Identity());
+
+    /// Joint two-state MAP solve: previous prior + combined IMU/bias factor + individual planes.
+    /// Source is deskewed in the current LiDAR frame, target is a fixed world-frame map.
+    /// No do_icp() call or ICP pose pseudo-measurement is used. Rejected/absent LiDAR yields
+    /// an IMU-only posterior. A positive interval and positive definite prior are required.
+    TightlyCoupledResult do_tightly_icp(const NavStatePrior& previous,
+                                       const imu_preint::ImuPreintegrator& preintegration,
+                                       const Eigen::Vector3d& gravity,
+                                       const Eigen::Isometry3d& T_imu_lidar = Eigen::Isometry3d::Identity(),
+                                       const TightlyCoupledOptions& tight_options = TightlyCoupledOptions{});
 
     /**
      * @brief Convenience overload setting both clouds and running, with an identity initial guess

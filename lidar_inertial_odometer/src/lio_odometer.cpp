@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <chrono>
 
 namespace
 {
@@ -67,6 +68,8 @@ LioOdometer::LioOdometer(const LioOptions& options) : options_(options)
 
 void LioOdometer::AddImu(const ImuSample& sample)
 {
+    if (!std::isfinite(sample.timestamp) || !sample.angular_velocity.allFinite() || !sample.linear_acceleration.allFinite())
+        return;
     if (!imu_queue_.empty() && sample.timestamp <= imu_queue_.back().timestamp)
     {
         return;  // drop samples that go back in time
@@ -171,6 +174,8 @@ bool LioOdometer::Initialize(double timestamp)
         mean_accel += sample->linear_acceleration;
     }
     mean_accel /= static_cast<double>(count);
+    if (options_.use_tightly_coupled)
+        mean_accel -= options_.initial_accel_bias;
 
     if (mean_accel.norm() < 1.0)
     {
@@ -197,6 +202,12 @@ bool LioOdometer::Initialize(double timestamp)
     state_.rotation = Orthonormalize(initial_rotation);
     state_.position.setZero();
     state_.velocity.setZero();
+    if (options_.use_tightly_coupled)
+    {
+        state_.gyro_bias = options_.initial_gyro_bias;
+        state_.accel_bias = options_.initial_accel_bias;
+    }
+    state_covariance_ = options_.initial_covariance;
 
     initialized_ = true;
     velocity_initialized_ = false;
@@ -287,6 +298,11 @@ std::vector<RawLidarPoint> LioOdometer::Deskew(const std::vector<RawLidarPoint>&
 
 void LioOdometer::ProcessScan(const QueuedScan& scan)
 {
+    if (options_.use_tightly_coupled)
+    {
+        ProcessTightlyCoupledScan(scan);
+        return;
+    }
     LioFrameResult result;
     result.timestamp = scan.timestamp;
 
@@ -340,7 +356,9 @@ void LioOdometer::ProcessScan(const QueuedScan& scan)
             icp_target_version_ = map_version_;
         }
 
+        const auto icp_begin = std::chrono::steady_clock::now();
         const p2p_icp::IcpResult icp_result = icp_.do_icp(lidar_pose_prediction);
+        result.icp_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - icp_begin).count();
         result.icp_iterations = icp_result.iterations;
         result.icp_correspondences = icp_result.correspondences;
         result.icp_error = icp_result.final_error;
@@ -453,10 +471,10 @@ void LioOdometer::ProcessScan(const QueuedScan& scan)
         }
 
         std::printf(
-                "[lio] t=%.3f | feat %4d/%4d | map %6d | icp %s iter %2d corr %5d rms %.4f | "
+                "[lio] t=%.3f | feat %4d/%4d | map %6d | icp %s iter %2d corr %5d rms %.4f %7.2f ms | "
                 "p=(%8.2f %8.2f %6.2f) v=%.2f m/s%s\n",
                 scan.timestamp, result.num_features, features.num_candidates, result.num_map_points, icp_state, result.icp_iterations,
-                result.icp_correspondences, result.icp_error, updated.position.x(), updated.position.y(), updated.position.z(),
+                result.icp_correspondences, result.icp_error, result.icp_ms, updated.position.x(), updated.position.y(), updated.position.z(),
                 updated.velocity.norm(), keyframe_mark);
     }
 

@@ -463,7 +463,7 @@ struct PipelineOutcome
 
 const std::size_t kWarmupFrames = 5;
 
-PipelineOutcome RunPipeline(NormalMethod method, bool enable_deskew)
+PipelineOutcome RunPipeline(NormalMethod method, bool enable_deskew, bool tightly_coupled = true)
 {
     GroundTruthMotion motion;
     // Pure turn + forward motion, to stay inside the synthetic scene.
@@ -471,6 +471,7 @@ PipelineOutcome RunPipeline(NormalMethod method, bool enable_deskew)
     motion.body_accel = Eigen::Vector3d(0.0, 0.0, 0.0);
 
     LioOptions options;
+    options.use_tightly_coupled = tightly_coupled;
     options.T_imu_lidar = Eigen::Isometry3d::Identity();
     options.T_imu_lidar.translation() = Eigen::Vector3d(0.0, 0.0, 0.3);
     options.gravity = motion.gravity;
@@ -586,13 +587,16 @@ PipelineOutcome RunPipeline(NormalMethod method, bool enable_deskew)
 
 void TestOdometryPipeline()
 {
-    std::printf("\n[2] LioOdometer -- IMU preintegration -> initial_guess -> ICP\n");
+    std::printf("\n[2] LioOdometer -- joint IMU / point-to-plane optimization\n");
 
     const int expected_frames = 38;  // initialization consumes up to 2 of the 40 scans
 
+    PipelineOutcome with_deskew;
     for (const NormalMethod method : {NormalMethod::kLoamCurvature, NormalMethod::kNeighborhoodPca})
     {
         const PipelineOutcome outcome = RunPipeline(method, true);
+        if (method == NormalMethod::kNeighborhoodPca)
+            with_deskew = outcome;
         std::printf(
                 "     -- %-16s: frames %2zu | travelled %.1f m | ATE max %.3f m | drift %.2f %% | "
                 "RPE %.4f m / %.3f deg\n",
@@ -609,11 +613,21 @@ void TestOdometryPipeline()
     // distortion pattern repeats every scan and largely cancels even without
     // correction; real driving keeps changing, so it does not. The accuracy of
     // the deskew expression itself is checked point-wise in [1b].
-    const PipelineOutcome with_deskew = RunPipeline(NormalMethod::kNeighborhoodPca, true);
     const PipelineOutcome without_deskew = RunPipeline(NormalMethod::kNeighborhoodPca, false);
     std::printf("     -- deskew on drift %.2f %% (RPE %.4f m) vs off %.2f %% (RPE %.4f m)\n", with_deskew.drift_percent,
                 with_deskew.max_relative_position_error, without_deskew.drift_percent, without_deskew.max_relative_position_error);
     Check(with_deskew.drift_percent < 0.5, "deskew on: drift < 0.5 % of distance travelled");
+
+    // Keep the original do_icp + manual velocity feedback path under the same accuracy checks.
+    for (const auto method : {NormalMethod::kLoamCurvature, NormalMethod::kNeighborhoodPca})
+    {
+        const auto legacy = RunPipeline(method, true, false);
+        const auto label = std::string("legacy ") + ToString(method);
+        Check(legacy.frames >= static_cast<std::size_t>(expected_frames), label + ": scans processed");
+        Check(legacy.max_relative_position_error < 0.03, label + ": RPE < 3 cm");
+        Check(legacy.drift_percent < 0.5, label + ": drift < 0.5 %");
+        Check(legacy.max_rotation_error < 0.03, label + ": attitude error < 1.7 deg");
+    }
 }
 
 }  // namespace

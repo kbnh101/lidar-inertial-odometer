@@ -15,8 +15,9 @@ docker/                    Humble development container
 ```
 
 This is the **point-to-plane-icp** branch, based on the common ROS 2/GPS commit.
-LIO links `IcpPointToPlane` and minimizes only `n_y^T e` (one scalar residual block
-per correspondence). The matcher normalizes supplied normals, rejects targets
+LIO links `IcpPointToPlane` and defaults to `do_tightly_icp()`, jointly minimizing
+point-to-plane, IMU and bias residuals. The original `do_icp()` is unchanged and
+can be selected with `use_tightly_coupled: false`. The matcher normalizes supplied normals, rejects targets
 without a finite plane normal, and rejects unusable Ceres solutions.
 The ROS 2 and GPS interfaces are shared with `main`.
 
@@ -106,10 +107,63 @@ The GT package has no dependency on `lio_core` or its matching method.
 
 ## Algorithms
 
-For each scan: IMU prediction -> filtering and channel selection -> deskew ->
-planar feature extraction with PCA normals -> scan-to-local-map ICP -> state and
-velocity update -> keyframe map update. The IMU prediction initializes ICP and gates
-large corrections. See [lio_odometer.cpp](lidar_inertial_odometer/src/lio_odometer.cpp).
+For each scan: bias-corrected IMU prediction -> filtering and channel selection ->
+deskew -> planar feature extraction with PCA normals -> joint scan-to-map/IMU
+optimization -> keyframe map update. The tightly coupled path is in
+[tightly_coupled_lio.cpp](lidar_inertial_odometer/src/tightly_coupled_lio.cpp);
+the original independent ICP and velocity feedback path remains in
+[lio_odometer.cpp](lidar_inertial_odometer/src/lio_odometer.cpp).
+
+### Tightly coupled point-to-plane ICP
+
+`IcpPointToPlane::do_tightly_icp(prior, preintegration, gravity, T_imu_lidar, options)`
+uses the same nearest-neighbor/normal correspondence search as `do_icp()`. It
+optimizes **both adjacent states** `(R, p, v, bg, ba)`, with a Gaussian prior on
+the previous state, a 15-dimensional combined IMU/bias factor, and individual
+point-to-plane residuals on the current state. It does not consume a completed
+ICP pose as a measurement. Rotation uses right SO(3) increments, position and
+velocity use world-frame increments. State/residual order is `rotation, position,
+velocity, gyro bias, accel bias`.
+
+The IMU library subtracts the integration bias, analytically propagates the
+9-by-6 preintegration bias Jacobian and 15-by-15 covariance (including bias
+random-walk cross correlations), and retains samples for reintegration. The
+factor uses first-order bias correction and reintegrates between outer iterations
+when its bias thresholds are exceeded. All three factors provide explicit analytic
+Jacobians through `ceres::SizedCostFunction`, including the SO(3) Exp/Log and
+bias-correction derivatives. Central differences are used only in tests.
+Residuals are whitened by `L^-1` for covariance `L L^T`. A `1e-12` diagonal
+integration floor handles the rank-deficient covariance of a single Euler step.
+
+This is a **two-state recursive estimator**, not a multi-keyframe smoothing
+backend. The marginal current-state covariance is extracted from the joint
+linearized problem and transported to the new rotation tangent; it becomes the
+next prior. Previous poses in the published trajectory and local map remain
+fixed. The map is treated as deterministic, so its uncertainty and correlations
+with the state are not modeled. No loop closure, extrinsic calibration or time
+offset estimation is performed.
+
+LIO rebuilds deskew/features with the updated velocity and bias for up to
+`tight_deskew_iterations` passes. These passes always reuse the original prior
+to avoid counting one scan repeatedly. Deskew is fixed within each Ceres solve;
+its state derivatives are not included in the plane factor. The first scan
+establishes the map without a zero-duration IMU factor. During the second scan,
+the initial anchor cloud is re-deskewed using the inferred starting velocity and
+bias, keeping its world pose fixed; this prevents a moving start from leaving
+an incorrectly deskewed anchor in the map. Missing or gated-out
+LiDAR produces an IMU-only posterior with propagated covariance and does not
+insert a keyframe into an established map. Incomplete IMU intervals are skipped.
+
+Configure noise densities, initial bias and state standard deviations in
+`kitti.yaml`. Noise values are starting values, not a KITTI sensor calibration.
+Initial gyro bias defaults to zero rather than assuming that the initialization
+window is stationary; a calibrated bias can be supplied. Initial accel bias is
+subtracted during gravity alignment. The initial pose prior anchors the world
+frame, and a broad velocity prior allows a moving start. The legacy
+`velocity_correction_gain` is used only with `use_tightly_coupled: false`.
+
+The preintegration formulation follows
+[Forster et al., On-Manifold Preintegration](https://arxiv.org/abs/1512.02363).
 
 For a correspondence `(x, y)` and incremental pose `xi = [tx, ty, tz, alpha, beta, gamma]`:
 
@@ -119,7 +173,7 @@ point residual: r = e               (3 dimensions)
 plane residual: r = n_y^T e         (1 dimension)
 ```
 
-Both solvers use analytic Jacobians and Ceres, re-search correspondences each outer
+The standalone point-to-point and point-to-plane solvers use analytic Jacobians and Ceres, re-search correspondences each outer
 iteration and compose small increments around a centroid pivot. Normals gate
 correspondences in point-to-plane; point-to-point uses distance only.
 

@@ -52,6 +52,7 @@ endif()
 
 add_library(p2p_icp_vendored STATIC
   ${P2P_ICP_DIR}/src/icp_point_to_plane.cpp
+  ${P2P_ICP_DIR}/src/tightly_coupled.cpp
 )
 target_include_directories(p2p_icp_vendored PUBLIC ${P2P_ICP_DIR}/include)
 target_link_libraries(p2p_icp_vendored PUBLIC common_vendored Eigen3::Eigen Ceres::ceres)
@@ -71,11 +72,13 @@ add_library(imu_preint_vendored STATIC
 target_include_directories(imu_preint_vendored PUBLIC ${IMU_PREINT_DIR}/include)
 target_link_libraries(imu_preint_vendored PUBLIC Eigen3::Eigen)
 set_target_properties(imu_preint_vendored PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_link_libraries(p2p_icp_vendored PUBLIC imu_preint_vendored)
 
 add_library(lio_core
   src/feature_extractor.cpp
   src/local_map.cpp
   src/lio_odometer.cpp
+  src/tightly_coupled_lio.cpp
 )
 target_include_directories(lio_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
