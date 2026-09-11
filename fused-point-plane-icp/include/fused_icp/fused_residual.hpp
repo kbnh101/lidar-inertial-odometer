@@ -3,13 +3,15 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 #include <cmath>
-#include <vector>
 
 #include "fused_icp/se3.hpp"
 
 /// The residual algebra of "Point-to-Point + Point-to-Plane Residual/Jacobian 상세 유도" as plain
-/// Eigen functions. Everything here is independent of Ceres, so the cost function, the demo and the
-/// tests all call the same formulas. Equation numbers refer to that note.
+/// Eigen functions: the error, its geometric Jacobian and the fused weighting -- nothing about
+/// solving. Everything here is independent of Ceres, so FusedPointPlaneCostFunction, the demo and
+/// the tests all call the same formulas; the normal equations are assembled by Ceres
+/// (IcpFusedPointPlane) and, as a reference, by the direct loop in test_icp.cpp.
+/// Equation numbers refer to that note.
 ///
 ///   e   = R p + t - q                                   (3)  geometric error of one pair
 ///   G   = de/ddelta_xi = [-R[p]x  R]  in R^{3x6}         (20) geometric Jacobian, right perturbation
@@ -24,7 +26,6 @@ namespace fused_icp
 {
 using Matrix36 = Eigen::Matrix<double, 3, 6>;
 using Matrix16 = Eigen::Matrix<double, 1, 6>;
-using Matrix66 = Eigen::Matrix<double, 6, 6>;
 using Vector6 = Eigen::Matrix<double, 6, 1>;
 
 /// The two non-negative weights of the fused cost. alpha = 0 is pure point-to-plane, beta = 0 is
@@ -128,78 +129,6 @@ inline Matrix36 fused_jacobian(const Matrix36& G, const Eigen::Vector3d& normal,
     const double c = std::sqrt(weights.alpha + weights.beta) - sqrt_alpha;
     const Matrix16 a = normal.transpose() * G;  // the point-to-plane row, n^T G, note (27)
     return sqrt_alpha * G + c * normal * a;
-}
-
-/**
- * @brief Huber weight of the IRLS approximation, note (64), on s = e^T Omega e = |r_f|^2
- *
- * @param squared_norm s
- * @param huber_delta delta_H; 0 or negative disables robustification (w = 1)
- * @return w(s)
- */
-inline double huber_weight(double squared_norm, double huber_delta)
-{
-    if (huber_delta <= 0.0 || squared_norm <= huber_delta * huber_delta)
-    {
-        return 1.0;
-    }
-    return huber_delta / std::sqrt(squared_norm);
-}
-
-/// One correspondence in the frame the increment acts on: p in the source frame, q and n in the
-/// target frame.
-struct Correspondence
-{
-    Eigen::Vector3d source_point{Eigen::Vector3d::Zero()};  ///< p
-    Eigen::Vector3d target_point{Eigen::Vector3d::Zero()};  ///< q
-    Eigen::Vector3d target_normal{Eigen::Vector3d::Zero()};  ///< n, unit
-};
-
-/// The Gauss-Newton normal equations H delta_xi = b of note (49)/(50).
-struct NormalEquations
-{
-    Matrix66 H = Matrix66::Zero();  ///< sum_i w_i G_i^T Omega_i G_i = sum_i w_i J_f,i^T J_f,i
-    Vector6 b = Vector6::Zero();  ///< -sum_i w_i G_i^T Omega_i e_i = -sum_i w_i J_f,i^T r_f,i
-    double cost = 0.0;  ///< 1/2 sum_i rho(|r_f,i|^2) with the Huber rho of note (64)
-};
-
-/**
- * @brief Direct accumulation of H and b without forming L, note (50) with the IRLS weight of (64)
- *
- * This is the C++ loop of the note, kept as a reference implementation. The Ceres path of
- * IcpFusedPointPlane assembles exactly the same H and b from FusedPointPlaneCostFunction
- * (r_f, J_f), which test_icp checks numerically. Ceres' Huber corrector additionally applies the
- * rho'' curvature term, so beyond the IRLS approximation the two differ only when the loss is active.
- *
- * @param pose current T
- * @param correspondences pairs in the source / target frames
- * @param weights alpha, beta
- * @param huber_delta delta_H, 0 disables the loss
- * @return H, b and the robust cost at T
- */
-inline NormalEquations accumulate_normal_equations(const Eigen::Isometry3d& pose, const std::vector<Correspondence>& correspondences,
-                                                   const FusedWeights& weights, double huber_delta)
-{
-    NormalEquations equations;
-    const Eigen::Matrix3d& R = pose.linear();
-    for (const Correspondence& pair : correspondences)
-    {
-        const Eigen::Vector3d e = geometric_error(pose, pair.source_point, pair.target_point);
-        const Matrix36 G = geometric_jacobian(R, pair.source_point);
-        const Matrix16 a = pair.target_normal.transpose() * G;  // n^T G
-        const double d = pair.target_normal.dot(e);  // n^T e
-
-        const double s = weights.alpha * e.squaredNorm() + weights.beta * d * d;  // e^T Omega e
-        const double w = huber_weight(s, huber_delta);
-
-        equations.H += w * (weights.alpha * G.transpose() * G + weights.beta * a.transpose() * a);
-        equations.b -= w * (weights.alpha * G.transpose() * e + weights.beta * a.transpose() * d);
-
-        // rho(s) of note (64), halved like every cost in the note.
-        const double rho = (huber_delta <= 0.0 || s <= huber_delta * huber_delta) ? s : 2.0 * huber_delta * std::sqrt(s) - huber_delta * huber_delta;
-        equations.cost += 0.5 * rho;
-    }
-    return equations;
 }
 
 }  // namespace fused_icp

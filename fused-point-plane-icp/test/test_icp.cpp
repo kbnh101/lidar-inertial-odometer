@@ -11,6 +11,7 @@
 #include <gtest/gtest.h>
 
 #include <Eigen/Geometry>
+#include <cmath>
 #include <cstdio>
 #include <random>
 #include <string>
@@ -24,11 +25,64 @@
 
 namespace
 {
-using fused_icp::Correspondence;
 using fused_icp::FusedWeights;
 using fused_icp::Matrix36;
-using fused_icp::Matrix66;
 using fused_icp::Vector6;
+using Matrix16 = Eigen::Matrix<double, 1, 6>;
+using Matrix66 = Eigen::Matrix<double, 6, 6>;
+
+/// One correspondence in the frame the increment acts on: p in the source frame, q and n in the target frame.
+struct Correspondence
+{
+    Eigen::Vector3d source_point{Eigen::Vector3d::Zero()};  ///< p
+    Eigen::Vector3d target_point{Eigen::Vector3d::Zero()};  ///< q
+    Eigen::Vector3d target_normal{Eigen::Vector3d::Zero()};  ///< n, unit
+};
+
+/// Gauss-Newton normal equations H delta_xi = b of note (49)/(50), assembled without Ceres.
+struct NormalEquations
+{
+    Matrix66 H = Matrix66::Zero();  ///< sum_i w_i G_i^T Omega_i G_i = sum_i w_i J_f,i^T J_f,i
+    Vector6 b = Vector6::Zero();  ///< -sum_i w_i G_i^T Omega_i e_i = -sum_i w_i J_f,i^T r_f,i
+    double cost = 0.0;  ///< 1/2 sum_i rho(|r_f,i|^2) with the Huber rho of note (64)
+};
+
+/// Huber weight of the IRLS approximation, note (64), on s = e^T Omega e = |r_f|^2; delta <= 0 disables it.
+double huber_weight(double squared_norm, double huber_delta)
+{
+    if (huber_delta <= 0.0 || squared_norm <= huber_delta * huber_delta)
+    {
+        return 1.0;
+    }
+    return huber_delta / std::sqrt(squared_norm);
+}
+
+/// The direct C++ loop of the note (page 13), note (50) with the IRLS weight of (64). It is the
+/// reference the Ceres path is checked against below: same H, b and (for delta_H = 0) same cost.
+NormalEquations accumulate_normal_equations(const Eigen::Isometry3d& pose, const std::vector<Correspondence>& correspondences, const FusedWeights& weights,
+                                            double huber_delta)
+{
+    NormalEquations equations;
+    const Eigen::Matrix3d& R = pose.linear();
+    for (const Correspondence& pair : correspondences)
+    {
+        const Eigen::Vector3d e = fused_icp::geometric_error(pose, pair.source_point, pair.target_point);
+        const Matrix36 G = fused_icp::geometric_jacobian(R, pair.source_point);
+        const Matrix16 a = pair.target_normal.transpose() * G;  // n^T G
+        const double d = pair.target_normal.dot(e);  // n^T e
+
+        const double s = weights.alpha * e.squaredNorm() + weights.beta * d * d;  // e^T Omega e
+        const double w = huber_weight(s, huber_delta);
+
+        equations.H += w * (weights.alpha * G.transpose() * G + weights.beta * a.transpose() * a);
+        equations.b -= w * (weights.alpha * G.transpose() * e + weights.beta * a.transpose() * d);
+
+        // rho(s) of note (64), halved like every cost in the note.
+        const double rho = (huber_delta <= 0.0 || s <= huber_delta * huber_delta) ? s : 2.0 * huber_delta * std::sqrt(s) - huber_delta * huber_delta;
+        equations.cost += 0.5 * rho;
+    }
+    return equations;
+}
 
 std::string data_path(const std::string& file)
 {
@@ -260,7 +314,7 @@ TEST(FusedResidual, ThreeDimensionalAndStackedFormsAgree)
             b4 -= J4.transpose() * r4;
         }
 
-        const fused_icp::NormalEquations direct = fused_icp::accumulate_normal_equations(pose, pairs, weights, 0.0);
+        const NormalEquations direct = accumulate_normal_equations(pose, pairs, weights, 0.0);
 
         const double scale = std::max(1.0, H3.cwiseAbs().maxCoeff());
         EXPECT_LT((H3 - H4).cwiseAbs().maxCoeff() / scale, 1e-13);
@@ -317,7 +371,7 @@ TEST(FusedCost, CeresTangentJacobianEqualsAnalytic)
     EXPECT_TRUE(J.isApprox(J_expected, 1e-12));
     EXPECT_TRUE(r.isApprox(r_expected, 1e-12));
 
-    const fused_icp::NormalEquations direct = fused_icp::accumulate_normal_equations(pose, pairs, weights, 0.0);
+    const NormalEquations direct = accumulate_normal_equations(pose, pairs, weights, 0.0);
     EXPECT_TRUE((J.transpose() * J).isApprox(direct.H, 1e-12));
     EXPECT_TRUE((-J.transpose() * r).isApprox(direct.b, 1e-12));
     EXPECT_NEAR(cost, direct.cost, 1e-12);
@@ -378,7 +432,7 @@ TEST(FusedCost, JointHuberCostMatchesCeresLoss)
 
     double cost = 0.0;
     ASSERT_TRUE(problem.Evaluate(ceres::Problem::EvaluateOptions(), &cost, nullptr, nullptr, nullptr));
-    const fused_icp::NormalEquations direct = fused_icp::accumulate_normal_equations(pose, pairs, weights, huber_delta);
+    const NormalEquations direct = accumulate_normal_equations(pose, pairs, weights, huber_delta);
     EXPECT_NEAR(cost, direct.cost, 1e-10 * std::max(1.0, cost));
 
     // At least one pair must be inside and one outside the quadratic zone for this to mean anything.
@@ -421,8 +475,8 @@ TEST(FusedResidual, PointWeightRemovesSinglePlaneDegeneracy)
         return (eigen.eigenvalues().array() > threshold).count();
     };
 
-    EXPECT_EQ(rank_of(fused_icp::accumulate_normal_equations(pose, pairs, FusedWeights{0.0, 1.0}, 0.0).H), 3);
-    EXPECT_EQ(rank_of(fused_icp::accumulate_normal_equations(pose, pairs, FusedWeights{0.1, 1.0}, 0.0).H), 6);
+    EXPECT_EQ(rank_of(accumulate_normal_equations(pose, pairs, FusedWeights{0.0, 1.0}, 0.0).H), 3);
+    EXPECT_EQ(rank_of(accumulate_normal_equations(pose, pairs, FusedWeights{0.1, 1.0}, 0.0).H), 6);
 
     // Limits: beta = 0 is sqrt(alpha) e, alpha = 0 is sqrt(beta) n (n^T e), (page 14).
     const Eigen::Vector3d e(0.3, -0.2, 0.5);

@@ -140,9 +140,12 @@ with the analytic `J_f` -- no AutoDiff, no Euler angles. The cost function retur
 so Ceres' product is `J_f` exactly; the built-in `QuaternionManifold` would rescale it
 (note, page 11). Before the solve the source is re-parametrized around its centroid
 (`p' = p - c`, `T' = T [I c; 0 1]`) to remove the rotation/translation coupling of `H`.
-See [fused_residual.hpp](fused-point-plane-icp/include/fused_icp/fused_residual.hpp),
-[fused_cost.hpp](fused-point-plane-icp/include/fused_icp/fused_cost.hpp) and
-[icp_fused_point_plane.cpp](fused-point-plane-icp/src/icp_fused_point_plane.cpp).
+See [fused_residual.hpp](fused-point-plane-icp/include/fused_icp/fused_residual.hpp) (the
+residual algebra only: `e`, `G`, `Omega`, `L`, `r_f`, `J_f`),
+[fused_cost.hpp](fused-point-plane-icp/include/fused_icp/fused_cost.hpp) (Ceres manifold and
+cost function) and [icp_fused_point_plane.cpp](fused-point-plane-icp/src/icp_fused_point_plane.cpp)
+(the ICP loop). The note's direct `H, b` accumulation loop lives in the test as the reference
+the Ceres assembly is checked against.
 
 `icp_point_weight` (alpha) and `icp_plane_weight` (beta) in
 [kitti.yaml](lidar_inertial_odometer/config/kitti.yaml) set the weights. Scan-to-map
