@@ -56,7 +56,7 @@ lidar_inertial_odometer:
     # --------------------------------------------------------------------------
     # 초기화
     # --------------------------------------------------------------------------
-    init_imu_samples: 1          # 100 Hz 기준 1 s
+    init_imu_samples: 100          # 100 Hz 기준 1 s
     use_imu_orientation_for_yaw: true   # OXTS 절대 방위로 world 를 ENU 에 정렬
 
     # --------------------------------------------------------------------------
@@ -148,7 +148,7 @@ lidar_inertial_odometer:
     #   합성 테스트(test_lio_core) 기준 alpha <= 0.01 이면 point-to-plane 과 같은
     #   드리프트, alpha >= 0.05 부터 접평면 편향으로 드리프트가 는다.
     # --------------------------------------------------------------------------
-    icp_point_weight: 0.01        # alpha
+    icp_point_weight: 0.1        # alpha
     icp_plane_weight: 1.0         # beta
     icp_max_iterations: 12
     icp_solver_iterations: 6
